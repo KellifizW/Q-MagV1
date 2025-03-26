@@ -1,5 +1,6 @@
 streamlit
 pandas
+pandas_market_calendars
 yfinance
 plotly
 lxml
