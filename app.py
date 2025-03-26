@@ -62,8 +62,11 @@ if st.button("運行篩選"):
 if 'df' in st.session_state:
     df = st.session_state['df']
     st.subheader("篩選結果")
+    # 確保 Date 欄位格式一致
+    df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
     # 只顯示最近一天的數據
-    latest_df = df[df['Date'] == df['Date'].max()].copy()
+    latest_date = df['Date'].max()
+    latest_df = df[df['Date'] == latest_date].copy()
     # 添加狀態欄位
     latest_df.loc[:, 'Status'] = latest_df.apply(
         lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume']
