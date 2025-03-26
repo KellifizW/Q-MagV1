@@ -4,6 +4,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import streamlit as st
 import time
+import pandas_market_calendars as mcal  # 導入交易日日曆模組
 
 def get_nasdaq_100():
     try:
@@ -34,38 +35,62 @@ def get_nasdaq_all():
         st.error(f"無法從 Nasdaq 獲取股票清單: {e}")
         return get_nasdaq_100()
 
+def get_trading_days(end_date, num_trading_days):
+    """
+    計算從 end_date 往前推 num_trading_days 個交易日的開始日期。
+    返回開始日期和結束日期。
+    """
+    # 使用 NYSE 日曆（NASDAQ 股票也適用）
+    nyse = mcal.get_calendar('NYSE')
+    # 為了確保有足夠的交易日，設置一個較大的自然日範圍（例如 120 天）
+    temp_start = end_date - timedelta(days=180)
+    schedule = nyse.schedule(start_date=temp_start, end_date=end_date)
+    
+    # 獲取交易日列表
+    trading_days = schedule.index
+    if len(trading_days) < num_trading_days:
+        raise ValueError(f"無法獲取 {num_trading_days} 個交易日，僅有 {len(trading_days)} 個交易日可用")
+    
+    # 從最後一天往前推 num_trading_days 個交易日
+    start_date = trading_days[-num_trading_days]
+    return start_date.date(), end_date
+
 @st.cache_data(ttl=3600)
-def fetch_stock_data(ticker, days=90):  # 將默認天數改為 90
+def fetch_stock_data(ticker, trading_days=70):
     max_retries = 3
+    end_date = datetime(2025, 3, 26).date()
+    try:
+        # 計算 70 個交易日的開始日期
+        start_date, end_date = get_trading_days(end_date, trading_days)
+    except Exception as e:
+        st.error(f"無法計算交易日範圍：{str(e)}")
+        return None
+
     for attempt in range(max_retries):
         try:
-            end_date = datetime(2025, 3, 26)
-            start_date = end_date - timedelta(days=days)
             stock = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=False, timeout=15)
             if stock.empty:
-                st.warning(f"無法獲取 {ticker} 的數據：數據為空")
-                return None
+                return None, f"數據為空"
             if 'Close' not in stock.columns or 'Volume' not in stock.columns:
-                st.warning(f"無法獲取 {ticker} 的數據：缺少 'Close' 或 'Volume' 欄位")
-                return None
-            st.write(f"股票 {ticker} 下載數據：{len(stock)} 天（從 {start_date.strftime('%Y-%m-%d')} 到 {end_date.strftime('%Y-%m-%d')}）")
-            return stock
+                return None, f"缺少 'Close' 或 'Volume' 欄位"
+            return stock, None
         except Exception as e:
             if attempt < max_retries - 1:
                 st.warning(f"獲取 {ticker} 的數據失敗（第 {attempt + 1} 次嘗試）：{str(e)}，正在重試...")
                 time.sleep(2)
             else:
-                st.error(f"無法獲取 {ticker} 的數據（重試 {max_retries} 次後仍失敗）：{str(e)}")
-                return None
+                return None, f"重試 {max_retries} 次後仍失敗：{str(e)}"
 
 def analyze_stock(args):
     ticker, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr = args
-    # 固定下載 90 天數據
-    stock = fetch_stock_data(ticker, days=90)
+    # 下載 70 個交易日的數據
+    stock, error = fetch_stock_data(ticker, trading_days=70)
     required_days = prior_days + consol_days + 30
-    if stock is None or len(stock) < required_days:
-        st.warning(f"股票 {ticker} 數據不足，實際長度 {len(stock) if stock is not None else 0} 天，需至少 {required_days} 天")
-        return None
+    if stock is None:
+        return None, ticker, error
+    if len(stock) < required_days:
+        error = f"數據不足，實際長度 {len(stock)} 天，需至少 {required_days} 天"
+        return None, ticker, error
     
     close = stock['Close'].squeeze()
     volume = stock['Volume'].squeeze()
@@ -128,20 +153,36 @@ def analyze_stock(args):
         else:
             st.write(f"股票 {ticker} 不符合條件：22 日漲幅 = {rise_22:.2f}% (需 >= {min_rise_22}), 67 日漲幅 = {rise_67:.2f}% (需 >= {min_rise_67}), 盤整範圍 = {consolidation_range:.2f}% (需 <= {max_range}), ADR = {adr:.2f}% (需 >= {min_adr})")
 
-    return results
+    return results, None, None
 
 def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5, progress_bar=None):
     total_tickers = len(tickers)
     results = []
+    failed_stocks = {}  # 用於收集無法下載數據的股票及其原因
+
     for i, ticker in enumerate(tickers):
         try:
-            result = analyze_stock((ticker, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr))
+            result, failed_ticker, error = analyze_stock((ticker, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr))
             if result:
                 results.extend(result)
+            if failed_ticker and error:
+                if error in failed_stocks:
+                    failed_stocks[error].append(failed_ticker)
+                else:
+                    failed_stocks[error] = [failed_ticker]
         except Exception as e:
-            st.warning(f"處理 {ticker} 時發生錯誤：{str(e)}")
-            continue
+            error = f"處理時發生錯誤：{str(e)}"
+            if error in failed_stocks:
+                failed_stocks[error].append(ticker)
+            else:
+                failed_stocks[error] = [ticker]
         if progress_bar:
             progress_bar.progress(min((i + 1) / total_tickers, 1.0))
         time.sleep(0.05)
+
+    # 顯示合併的無法下載訊息
+    if failed_stocks:
+        for error, tickers in failed_stocks.items():
+            st.warning(f"無法獲取以下股票的數據：{tickers}，原因：{error}")
+
     return pd.DataFrame(results)
