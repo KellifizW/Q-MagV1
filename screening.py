@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from multiprocessing import Pool
 import streamlit as st
 import time
+from retrying import retry
 
 def get_nasdaq_100():
     try:
@@ -34,21 +35,26 @@ def get_nasdaq_all():
         st.error(f"無法從 Nasdaq 獲取股票清單: {e}")
         return get_nasdaq_100()
 
+# 添加重試機制
+@retry(stop_max_attempt_number=3, wait_fixed=2000)
+def fetch_stock_data_with_retry(ticker, days=90):
+    end_date = datetime.today()
+    start_date = end_date - timedelta(days=days)
+    stock = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=False, timeout=15)
+    if stock.empty:
+        st.warning(f"無法獲取 {ticker} 的數據：數據為空")
+        return None
+    if 'Close' not in stock.columns or 'Volume' not in stock.columns:
+        st.warning(f"無法獲取 {ticker} 的數據：缺少 'Close' 或 'Volume' 欄位")
+        return None
+    return stock
+
 @st.cache_data(ttl=3600)
 def fetch_stock_data(ticker, days=90):
     try:
-        end_date = datetime.today()
-        start_date = end_date - timedelta(days=days)
-        stock = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=False, timeout=10)
-        if stock.empty:
-            st.warning(f"無法獲取 {ticker} 的數據：數據為空")
-            return None
-        if 'Close' not in stock.columns or 'Volume' not in stock.columns:
-            st.warning(f"無法獲取 {ticker} 的數據：缺少 'Close' 或 'Volume' 欄位")
-            return None
-        return stock
+        return fetch_stock_data_with_retry(ticker, days)
     except Exception as e:
-        st.warning(f"無法獲取 {ticker} 的數據：{str(e)}")
+        st.warning(f"無法獲取 {ticker} 的數據（重試 3 次後仍失敗）：{str(e)}")
         return None
 
 def analyze_stock(args):
@@ -102,7 +108,7 @@ def analyze_stock(args):
     return results
 
 def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise=30, max_range=5, min_adr=5, progress_bar=None):
-    with Pool(processes=2) as pool:  # 進一步減少並行進程數
+    with Pool(processes=1) as pool:  # 減少並行進程數至 1，避免數據庫鎖定
         total_tickers = len(tickers)
         results = []
         for i, result in enumerate(pool.imap_unordered(analyze_stock, 
