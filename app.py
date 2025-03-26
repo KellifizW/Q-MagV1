@@ -40,7 +40,7 @@ with st.sidebar.form(key="screening_form"):
 if st.sidebar.button("重置篩選"):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
-    st.experimental_rerun()
+    st.rerun()
 
 # 處理股票池選擇和篩選
 if submit_button:
