@@ -35,15 +35,26 @@ def get_nasdaq_all():
 
 @st.cache_data(ttl=3600)
 def fetch_stock_data(ticker, days=90):
-    end_date = datetime.today()
-    start_date = end_date - timedelta(days=days)
-    stock = yf.download(ticker, start=start_date, end=end_date, progress=False)
-    return stock if not stock.empty else None
+    try:
+        end_date = datetime.today()
+        start_date = end_date - timedelta(days=days)
+        stock = yf.download(ticker, start=start_date, end=end_date, progress=False)
+        if stock.empty:
+            st.warning(f"無法獲取 {ticker} 的數據：數據為空")
+            return None
+        if 'Close' not in stock.columns or 'Volume' not in stock.columns:
+            st.warning(f"無法獲取 {ticker} 的數據：缺少 'Close' 或 'Volume' 欄位")
+            return None
+        return stock
+    except Exception as e:
+        st.warning(f"無法獲取 {ticker} 的數據：{str(e)}")
+        return None
 
 def analyze_stock(args):
     ticker, prior_days, consol_days, min_rise, max_range, min_adr = args
     stock = fetch_stock_data(ticker)
     if stock is None or len(stock) < prior_days + consol_days + 30:
+        st.warning(f"{ticker} 數據不足，跳過分析")
         return None
     
     close = stock['Close'].squeeze()
@@ -91,7 +102,7 @@ def analyze_stock(args):
     return results
 
 def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise=30, max_range=5, min_adr=5, progress_bar=None):
-    with Pool() as pool:
+    with Pool(processes=4) as pool:  # 限制並行進程數
         total_tickers = len(tickers)
         results = []
         for i, result in enumerate(pool.imap_unordered(analyze_stock, 
@@ -101,4 +112,5 @@ def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise=30, max_range
                 results.extend(result)
             if progress_bar:
                 progress_bar.progress(min((i + 1) / total_tickers, 1.0))
+            st.write(f"已處理 {i + 1}/{total_tickers} 隻股票")
     return pd.DataFrame(results)
