@@ -101,15 +101,17 @@ if 'df' in st.session_state:
     })
     st.dataframe(display_df[['股票代碼', '日期', '價格', '前段漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']])
     
-    # 繪製前 5 名股票走勢圖
+    # 繪製符合條件的股票走勢圖
     unique_tickers = latest_df['Ticker'].unique()
-    if len(unique_tickers) > 5:
-        st.subheader("前 5 名股票走勢（按前段漲幅排序）")
-        # 按前段漲幅排序並取前 5 個非重複股票
-        top_5_df = latest_df.groupby('Ticker').agg({'Prior_Rise_%': 'max'}).reset_index()
-        top_5_df = top_5_df.sort_values(by='Prior_Rise_%', ascending=False).head(5)
-        top_5_tickers = top_5_df['Ticker'].tolist()
-        plot_top_5_stocks(top_5_tickers)
+    if len(unique_tickers) > 0:  # 只要有符合條件的股票就繪製圖表
+        st.subheader("符合條件的股票走勢（按前段漲幅排序）")
+        # 按前段漲幅排序
+        top_df = latest_df.groupby('Ticker').agg({'Prior_Rise_%': 'max'}).reset_index()
+        top_df = top_df.sort_values(by='Prior_Rise_%', ascending=False)
+        # 如果股票數量大於 5，則只取前 5 隻；否則取所有股票
+        num_to_display = min(len(unique_tickers), 5)
+        top_tickers = top_df['Ticker'].head(num_to_display).tolist()
+        plot_top_5_stocks(top_tickers)
     
     # 繪製突破股票圖表
     breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume']]
