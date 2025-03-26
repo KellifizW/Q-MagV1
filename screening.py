@@ -4,7 +4,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import streamlit as st
 import time
-import pandas_market_calendars as mcal  # 導入交易日日曆模組
+import pandas_market_calendars as mcal
 
 def get_nasdaq_100():
     try:
@@ -36,22 +36,12 @@ def get_nasdaq_all():
         return get_nasdaq_100()
 
 def get_trading_days(end_date, num_trading_days):
-    """
-    計算從 end_date 往前推 num_trading_days 個交易日的開始日期。
-    返回開始日期和結束日期。
-    """
-    # 使用 NYSE 日曆（NASDAQ 股票也適用）
     nyse = mcal.get_calendar('NYSE')
-    # 為了確保有足夠的交易日，設置一個較大的自然日範圍（例如 120 天）
     temp_start = end_date - timedelta(days=180)
     schedule = nyse.schedule(start_date=temp_start, end_date=end_date)
-    
-    # 獲取交易日列表
     trading_days = schedule.index
     if len(trading_days) < num_trading_days:
         raise ValueError(f"無法獲取 {num_trading_days} 個交易日，僅有 {len(trading_days)} 個交易日可用")
-    
-    # 從最後一天往前推 num_trading_days 個交易日
     start_date = trading_days[-num_trading_days]
     return start_date.date(), end_date
 
@@ -60,7 +50,6 @@ def fetch_stock_data(ticker, trading_days=70):
     max_retries = 3
     end_date = datetime(2025, 3, 26).date()
     try:
-        # 計算 70 個交易日的開始日期
         start_date, end_date = get_trading_days(end_date, trading_days)
     except Exception as e:
         st.error(f"無法計算交易日範圍：{str(e)}")
@@ -83,7 +72,6 @@ def fetch_stock_data(ticker, trading_days=70):
 
 def analyze_stock(args):
     ticker, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr = args
-    # 下載 70 個交易日的數據
     stock, error = fetch_stock_data(ticker, trading_days=70)
     required_days = prior_days + consol_days + 30
     if stock is None:
@@ -97,6 +85,9 @@ def analyze_stock(args):
     dates = stock.index
     
     results = []
+    messages = []  # 用於收集每一天的篩選訊息
+    has_match = False  # 標記是否至少有一天符合條件
+
     for i in range(-30, 0):
         # 計算 22 日和 67 日漲幅
         if i + 22 >= 0 or len(close) < 22:
@@ -136,9 +127,9 @@ def analyze_stock(args):
         breakout = (i == -1) and (close.iloc[-1] > recent_high) and (close.iloc[-2] <= recent_high)
         breakout_volume = (i == -1) and (volume.iloc[-1] > volume.iloc[-10:].mean() * 1.5)
         
-        # 篩選條件
+        # 檢查篩選條件
         if rise_22 >= min_rise_22 and rise_67 >= min_rise_67 and consolidation_range <= max_range and adr >= min_adr:
-            st.write(f"股票 {ticker} 符合條件：22 日漲幅 = {rise_22:.2f}%, 67 日漲幅 = {rise_67:.2f}%, 盤整範圍 = {consolidation_range:.2f}%, ADR = {adr:.2f}%")
+            has_match = True
             results.append({
                 'Ticker': ticker,
                 'Date': dates[i].strftime('%Y-%m-%d'),
@@ -150,15 +141,28 @@ def analyze_stock(args):
                 'Breakout': breakout,
                 'Breakout_Volume': breakout_volume
             })
+            messages.append(f"股票 {ticker} 符合條件：22 日漲幅 = {rise_22:.2f}%, 67 日漲幅 = {rise_67:.2f}%, 盤整範圍 = {consolidation_range:.2f}%, ADR = {adr:.2f}%")
         else:
-            st.write(f"股票 {ticker} 不符合條件：22 日漲幅 = {rise_22:.2f}% (需 >= {min_rise_22}), 67 日漲幅 = {rise_67:.2f}% (需 >= {min_rise_67}), 盤整範圍 = {consolidation_range:.2f}% (需 <= {max_range}), ADR = {adr:.2f}% (需 >= {min_adr})")
+            messages.append(f"股票 {ticker} 不符合條件：22 日漲幅 = {rise_22:.2f}% (需 >= {min_rise_22}), 67 日漲幅 = {rise_67:.2f}% (需 >= {min_rise_67}), 盤整範圍 = {consolidation_range:.2f}% (需 <= {max_range}), ADR = {adr:.2f}% (需 >= {min_adr})")
+
+    # 顯示合併訊息：如果有符合條件的天數，顯示最新一天的符合訊息；否則顯示最新一天的不符合訊息
+    if messages:
+        if has_match:
+            # 顯示最新一天的符合條件訊息
+            for msg in reversed(messages):
+                if "符合條件" in msg:
+                    st.write(msg)
+                    break
+        else:
+            # 顯示最新一天的不符合條件訊息
+            st.write(messages[-1])
 
     return results, None, None
 
 def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5, progress_bar=None):
     total_tickers = len(tickers)
     results = []
-    failed_stocks = {}  # 用於收集無法下載數據的股票及其原因
+    failed_stocks = {}
 
     for i, ticker in enumerate(tickers):
         try:
@@ -180,7 +184,6 @@ def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise_22=10, min_ri
             progress_bar.progress(min((i + 1) / total_tickers, 1.0))
         time.sleep(0.05)
 
-    # 顯示合併的無法下載訊息
     if failed_stocks:
         for error, tickers in failed_stocks.items():
             st.warning(f"無法獲取以下股票的數據：{tickers}，原因：{error}")
