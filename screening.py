@@ -41,18 +41,27 @@ def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=
             low = stock['Low'].iloc[i - prior_days:i]
             prev_close = stock['Close'].shift(1).iloc[i - prior_days:i]
             
-            # 逐步檢查數據並計算 ADR
-            is_data_valid = not (high.empty or low.empty or prev_close.empty)
-            if is_data_valid:
-                is_all_nan = prev_close.isna().all()
+            # 除錯資訊
+            print(f"Ticker: {ticker}, i: {i}")
+            print(f"high type: {type(high)}, length: {len(high)}")
+            print(f"low type: {type(low)}, length: {len(low)}")
+            print(f"prev_close type: {type(prev_close)}, length: {len(prev_close)}")
+            
+            # 逐步檢查數據
+            if high.empty or low.empty or prev_close.empty:
+                print(f"{ticker}: Data empty at i={i}")
+                adr = 0
+            else:
+                is_all_nan = prev_close.isna().all()  # 檢查是否全為 NaN
+                print(f"{ticker}: is_all_nan type: {type(is_all_nan)}, value: {is_all_nan}")
                 if is_all_nan:
+                    print(f"{ticker}: prev_close all NaN at i={i}")
                     adr = 0
                 else:
                     daily_range = (high - low) / prev_close
                     adr_mean = daily_range.mean()
+                    print(f"{ticker}: daily_range type: {type(daily_range)}, mean: {adr_mean}")
                     adr = adr_mean * 100 if not pd.isna(adr_mean) else 0
-            else:
-                adr = 0
             
             breakout = (i == -1) and (close.iloc[-1] > recent_high) and (close.iloc[-2] <= recent_high)
             breakout_volume = (i == -1) and (volume.iloc[-1] > volume.iloc[-10:].mean() * 1.5)
