@@ -99,16 +99,61 @@ if 'df' in st.session_state:
         top_5_tickers = top_5_df['Ticker'].tolist()
         
         for ticker in top_5_tickers:
+            st.write(f"正在處理股票 {ticker}...")
             stock_data = fetch_stock_data(ticker, days=90)
-            if stock_data is not None and not stock_data.empty and len(stock_data) >= 10:
+            
+            # 檢查數據是否成功獲取
+            if stock_data is None:
+                st.error(f"無法繪製 {ticker} 的圖表：fetch_stock_data 返回 None")
+                continue
+            if stock_data.empty:
+                st.error(f"無法繪製 {ticker} 的圖表：數據為空")
+                continue
+            
+            # 檢查數據長度和日期範圍
+            st.write(f"{ticker} 數據長度：{len(stock_data)} 筆")
+            if not stock_data.empty:
+                st.write(f"{ticker} 數據日期範圍：{stock_data.index[0]} 到 {stock_data.index[-1]}")
+            
+            # 檢查必要欄位
+            required_columns = ['Close', 'Volume']
+            missing_columns = [col for col in required_columns if col not in stock_data.columns]
+            if missing_columns:
+                st.error(f"無法繪製 {ticker} 的圖表：缺少欄位 {missing_columns}")
+                continue
+            
+            # 檢查數據長度是否滿足要求
+            if len(stock_data) < 10:
+                st.error(f"無法繪製 {ticker} 的圖表：數據長度 {len(stock_data)} 小於最小要求 10")
+                continue
+            
+            try:
+                # 檢查數據中是否有 NaN 值
+                if stock_data['Close'].isna().any() or stock_data['Volume'].isna().any():
+                    st.warning(f"{ticker} 的數據中包含 NaN 值，將進行清理")
+                    stock_data = stock_data.dropna()
+                    st.write(f"清理後 {ticker} 數據長度：{len(stock_data)} 筆")
+                    if len(stock_data) < 10:
+                        st.error(f"清理後 {ticker} 的數據長度 {len(stock_data)} 小於最小要求 10")
+                        continue
+                
                 # 計算 10 日均線
                 stock_data['MA10'] = stock_data['Close'].rolling(window=10).mean()
+                if stock_data['MA10'].isna().all():
+                    st.error(f"無法繪製 {ticker} 的圖表：10 日均線計算結果全為 NaN")
+                    continue
+                
                 # 計算 MACD 指標
                 ema12 = stock_data["Close"].ewm(span=12, adjust=False).mean()
                 ema26 = stock_data["Close"].ewm(span=26, adjust=False).mean()
                 macd_line = ema12 - ema26
                 macd_signal = macd_line.ewm(span=9, adjust=False).mean()
                 macd_histogram = macd_line - macd_signal
+                
+                # 檢查 MACD 計算結果
+                if macd_line.isna().all() or macd_signal.isna().all() or macd_histogram.isna().all():
+                    st.error(f"無法繪製 {ticker} 的圖表：MACD 計算結果全為 NaN")
+                    continue
                 
                 # 創建子圖
                 fig = make_subplots(
@@ -122,16 +167,16 @@ if 'df' in st.session_state:
                 
                 # 添加股價線
                 fig.add_trace(
-                    go.Scatter(x
-                    x=stock_data.index,
-                    y=stock_data['Close'],
-                    mode='lines',
-                    name='股價',
-                    line=dict(color='blue'),
-                    hovertemplate="日期: %{x|%Y-%m-%d}<br>股價: %{y:.2f}<br>10 日均線: %{customdata:.2f}",
-                    customdata=stock_data['MA10']
-                ),
-                row=1, col=1, secondary_y=False
+                    go.Scatter(
+                        x=stock_data.index,
+                        y=stock_data['Close'],
+                        mode='lines',
+                        name='股價',
+                        line=dict(color='blue'),
+                        hovertemplate="日期: %{x|%Y-%m-%d}<br>股價: %{y:.2f}<br>10 日均線: %{customdata:.2f}",
+                        customdata=stock_data['MA10']
+                    ),
+                    row=1, col=1, secondary_y=False
                 )
                 # 添加 10 日均線
                 fig.add_trace(
@@ -223,24 +268,59 @@ if 'df' in st.session_state:
                 )
                 
                 st.plotly_chart(fig)
-            else:
-                st.error(f"無法繪製 {ticker} 的圖表：數據不足或獲取失敗")
+                st.write(f"成功繪製 {ticker} 的圖表")
+            except Exception as e:
+                st.error(f"繪製 {ticker} 的圖表時發生錯誤：{str(e)}")
     
     # 顯示突破股票的圖表
     breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume']]
     if not breakout_df.empty:
         st.subheader("當前突破股票（可買入）")
         for ticker in breakout_df['Ticker'].unique():
+            st.write(f"正在處理突破股票 {ticker}...")
             stock_data = fetch_stock_data(ticker)
-            if stock_data is not None and not stock_data.empty:
+            
+            # 檢查數據是否成功獲取
+            if stock_data is None:
+                st.error(f"無法繪製 {ticker} 的圖表：fetch_stock_data 返回 None")
+                continue
+            if stock_data.empty:
+                st.error(f"無法繪製 {ticker} 的圖表：數據為空")
+                continue
+            
+            # 檢查數據長度和日期範圍
+            st.write(f"{ticker} 數據長度：{len(stock_data)} 筆")
+            if not stock_data.empty:
+                st.write(f"{ticker} 數據日期範圍：{stock_data.index[0]} 到 {stock_data.index[-1]}")
+            
+            # 檢查必要欄位
+            required_columns = ['Close', 'Volume']
+            missing_columns = [col for col in required_columns if col not in stock_data.columns]
+            if missing_columns:
+                st.error(f"無法繪製 {ticker} 的圖表：缺少欄位 {missing_columns}")
+                continue
+            
+            try:
                 recent_high = stock_data['Close'][-consol_days-1:-1].max()
                 recent_low = stock_data['Close'][-consol_days-1:-1].min()
+                
+                # 檢查數據中是否有 NaN 值
+                if stock_data['Close'].isna().any() or stock_data['Volume'].isna().any():
+                    st.warning(f"{ticker} 的數據中包含 NaN 值，將進行清理")
+                    stock_data = stock_data.dropna()
+                    st.write(f"清理後 {ticker} 數據長度：{len(stock_data)} 筆")
+                
                 # 計算 MACD 指標
                 ema12 = stock_data["Close"].ewm(span=12, adjust=False).mean()
                 ema26 = stock_data["Close"].ewm(span=26, adjust=False).mean()
                 macd_line = ema12 - ema26
                 macd_signal = macd_line.ewm(span=9, adjust=False).mean()
                 macd_histogram = macd_line - macd_signal
+                
+                # 檢查 MACD 計算結果
+                if macd_line.isna().all() or macd_signal.isna().all() or macd_histogram.isna().all():
+                    st.error(f"無法繪製 {ticker} 的圖表：MACD 計算結果全為 NaN")
+                    continue
                 
                 # 創建子圖
                 fig = make_subplots(
@@ -375,8 +455,9 @@ if 'df' in st.session_state:
                 )
                 
                 st.plotly_chart(fig)
-            else:
-                st.error(f"無法繪製 {ticker} 的圖表：數據獲取失敗")
+                st.write(f"成功繪製 {ticker} 的圖表")
+            except Exception as e:
+                st.error(f"繪製 {ticker} 的圖表時發生錯誤：{str(e)}")
     else:
         st.info("當前無突破股票（無可買入股票）。可能原因：")
         if latest_df['Breakout'].sum() == 0:
