@@ -6,22 +6,27 @@ import streamlit as st
 
 def get_nasdaq_100():
     try:
-        return pd.read_html('https://en.wikipedia.org/wiki/Nasdaq-100')[4]['Ticker'].tolist()
-    except Exception:
+        # 修正表格索引為 0，正確獲取 Nasdaq 100 清單
+        return pd.read_html('https://en.wikipedia.org/wiki/Nasdaq-100')[0]['Ticker'].tolist()
+    except Exception as e:
+        st.error(f"無法從 Wikipedia 獲取 Nasdaq 100 清單: {e}")
         return ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA', 'TSLA', 'META', 'ADBE', 'PYPL', 'INTC']
 
 def get_sp500():
     try:
         return pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]['Symbol'].tolist()
-    except Exception:
-        return get_nasdaq_100()
+    except Exception as e:
+        st.error(f"無法從 Wikipedia 獲取 S&P 500 清單: {e}")
+        return get_nasdaq_100()  # 後備使用 Nasdaq 100
 
 def get_nasdaq_all():
     try:
+        # 使用 Nasdaq 官方 CSV 檔案
         nasdaq = pd.read_csv('https://old.nasdaq.com/screening/companies-by-name.aspx?letter=0&exchange=nasdaq&render=download')
         return nasdaq['Symbol'].tolist()
-    except Exception:
-        return get_nasdaq_100()  # 後備使用 NASDAQ 100
+    except Exception as e:
+        st.error(f"無法從 Nasdaq 獲取股票清單: {e}")
+        return get_nasdaq_100()  # 後備使用 Nasdaq 100
 
 @st.cache_data(ttl=3600)  # 快取 1 小時
 def fetch_stock_data(ticker, days=90):
@@ -30,7 +35,8 @@ def fetch_stock_data(ticker, days=90):
     stock = yf.download(ticker, start=start_date, end=end_date, progress=False)
     return stock if not stock.empty else None
 
-def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=5, min_adr=5):
+def analyze_stock(args):
+    ticker, prior_days, consol_days, min_rise, max_range, min_adr = args
     stock = fetch_stock_data(ticker)
     if stock is None or len(stock) < prior_days + consol_days + 30:
         return None
@@ -79,8 +85,15 @@ def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=
                 })
     return results
 
-def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise=30, max_range=5, min_adr=5):
+def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise=30, max_range=5, min_adr=5, progress_bar=None):
     with Pool() as pool:
-        results = pool.starmap(analyze_stock, [(ticker, prior_days, consol_days, min_rise, max_range, min_adr) for ticker in tickers])
-    all_results = [r for sublist in results if sublist for r in sublist]
-    return pd.DataFrame(all_results)
+        total_tickers = len(tickers)
+        results = []
+        for i, result in enumerate(pool.imap_unordered(analyze_stock, 
+                                                       [(ticker, prior_days, consol_days, min_rise, max_range, min_adr) 
+                                                        for ticker in tickers])):
+            if result:
+                results.extend(result)
+            if progress_bar:
+                progress_bar.progress(min((i + 1) / total_tickers, 1.0))  # 更新進度條
+    return pd.DataFrame(results)
