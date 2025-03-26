@@ -3,6 +3,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from multiprocessing import Pool
 import streamlit as st
+import time
 
 def get_nasdaq_100():
     try:
@@ -38,7 +39,7 @@ def fetch_stock_data(ticker, days=90):
     try:
         end_date = datetime.today()
         start_date = end_date - timedelta(days=days)
-        stock = yf.download(ticker, start=start_date, end=end_date, progress=False)
+        stock = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=False, timeout=10)
         if stock.empty:
             st.warning(f"無法獲取 {ticker} 的數據：數據為空")
             return None
@@ -54,7 +55,6 @@ def analyze_stock(args):
     ticker, prior_days, consol_days, min_rise, max_range, min_adr = args
     stock = fetch_stock_data(ticker)
     if stock is None or len(stock) < prior_days + consol_days + 30:
-        st.warning(f"{ticker} 數據不足，跳過分析")
         return None
     
     close = stock['Close'].squeeze()
@@ -102,7 +102,7 @@ def analyze_stock(args):
     return results
 
 def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise=30, max_range=5, min_adr=5, progress_bar=None):
-    with Pool(processes=4) as pool:  # 限制並行進程數
+    with Pool(processes=2) as pool:  # 進一步減少並行進程數
         total_tickers = len(tickers)
         results = []
         for i, result in enumerate(pool.imap_unordered(analyze_stock, 
@@ -112,5 +112,4 @@ def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise=30, max_range
                 results.extend(result)
             if progress_bar:
                 progress_bar.progress(min((i + 1) / total_tickers, 1.0))
-            st.write(f"已處理 {i + 1}/{total_tickers} 隻股票")
     return pd.DataFrame(results)
