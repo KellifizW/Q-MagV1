@@ -23,8 +23,9 @@ def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=
     if stock is None or len(stock) < prior_days + consol_days + 30:
         return None
     
-    close = stock['Close']
-    volume = stock['Volume']
+    # 確保使用 Series
+    close = stock['Close'].squeeze()  # 轉為 Series
+    volume = stock['Volume'].squeeze()  # 轉為 Series
     dates = stock.index
     
     results = []
@@ -36,10 +37,10 @@ def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=
             consolidation_range = (recent_high / recent_low - 1) * 100
             vol_decline = volume.iloc[i - consol_days:i].mean() < volume.iloc[i - prior_days:i - consol_days].mean()
             
-            # 修正為 Series 而非 DataFrame
-            high = stock['High'].iloc[i - prior_days:i]  # 已是 Series
-            low = stock['Low'].iloc[i - prior_days:i]    # 已是 Series
-            prev_close = stock['Close'].shift(1).iloc[i - prior_days:i]  # 已是 Series
+            # 明確提取 Series
+            high = stock['High'].squeeze().iloc[i - prior_days:i]
+            low = stock['Low'].squeeze().iloc[i - prior_days:i]
+            prev_close = stock['Close'].shift(1).squeeze().iloc[i - prior_days:i]
             
             # 除錯資訊
             print(f"Ticker: {ticker}, i: {i}")
@@ -52,7 +53,7 @@ def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=
                 print(f"{ticker}: Data empty at i={i}")
                 adr = 0
             else:
-                is_all_nan = prev_close.isna().all()  # 應為單一布林值
+                is_all_nan = prev_close.isna().all()  # 對 Series 運行，應返回布林值
                 print(f"{ticker}: is_all_nan type: {type(is_all_nan)}, value: {is_all_nan}")
                 if is_all_nan:
                     print(f"{ticker}: prev_close all NaN at i={i}")
