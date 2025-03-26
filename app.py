@@ -34,18 +34,27 @@ max_range = st.sidebar.slider("最大盤整範圍 (%)", 3, 15, 10, help="增加�
 min_adr = st.sidebar.slider("最小 ADR (%)", 0, 10, 0, help="設為 0 以納入更多股票")
 max_stocks = st.sidebar.slider("最大篩選股票數量", 10, 500, 50, help="限制股票數量以加快處理速度，僅適用於 NASDAQ All")
 
-# 選擇股票池（避免自動觸發篩選）
-if 'tickers' not in st.session_state:
+# 每次選擇股票池時更新 tickers
+if index_option != st.session_state.get('last_index_option', None):
     if index_option == "NASDAQ 100":
         st.session_state['tickers'] = get_nasdaq_100()
     elif index_option == "S&P 500":
         st.session_state['tickers'] = get_sp500()
     else:
         st.session_state['tickers'] = get_nasdaq_all()[:max_stocks]
+    st.session_state['last_index_option'] = index_option
+    # 重置篩選結果
+    if 'df' in st.session_state:
+        del st.session_state['df']
+
 tickers = st.session_state['tickers']
 
 # 篩選股票
 if st.button("運行篩選"):
+    # 重置篩選結果
+    if 'df' in st.session_state:
+        del st.session_state['df']
+    
     with st.spinner("篩選中..."):
         progress_bar = st.progress(0)
         df = screen_stocks(tickers, prior_days, consol_days, min_rise, max_range, min_adr, progress_bar)
