@@ -6,7 +6,6 @@ from multiprocessing import Pool
 # 動態獲取 NASDAQ 100 成分股
 def get_nasdaq_100():
     try:
-        # 注意：yfinance 目前不直接提供 NDX 成分股，這裡使用維基百科作為備用
         return pd.read_html('https://en.wikipedia.org/wiki/Nasdaq-100')[4]['Ticker'].tolist()
     except Exception:
         return ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA', 'TSLA', 'META', 'ADBE', 'PYPL', 'INTC']
@@ -21,7 +20,7 @@ def fetch_stock_data(ticker, days=90):
 
 def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=5, min_adr=5):
     stock = fetch_stock_data(ticker)
-    if stock is None or len(stock) < prior_days + consol_days:
+    if stock is None or len(stock) < prior_days + consol_days + 30:  # 確保有足夠數據
         return None
     
     close = stock['Close']
@@ -29,23 +28,25 @@ def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=
     dates = stock.index
     
     results = []
+    # 使用 iloc 從末尾向前數 30 天
     for i in range(-30, 0):
-        if i < -prior_days:
-            prior_rise = (close[i] / close[i-prior_days] - 1) * 100
-            recent_high = close[i-consol_days:i].max()
-            recent_low = close[i-consol_days:i].min()
+        if i < -prior_days:  # 確保有足夠的前期數據
+            # 使用 iloc 基於位置索引
+            prior_rise = (close.iloc[i] / close.iloc[i - prior_days] - 1) * 100
+            recent_high = close.iloc[i - consol_days:i].max()
+            recent_low = close.iloc[i - consol_days:i].min()
             consolidation_range = (recent_high / recent_low - 1) * 100
-            vol_decline = volume[i-consol_days:i].mean() < volume[i-prior_days:i-consol_days].mean()
-            daily_range = (stock['High'] - stock['Low']) / stock['Close'].shift(1)
-            adr = daily_range[i-prior_days:i].mean() * 100
-            breakout = (i == -1) and (close[-1] > recent_high) and (close[-2] <= recent_high)
-            breakout_volume = (i == -1) and (volume[-1] > volume[-10:].mean() * 1.5)
+            vol_decline = volume.iloc[i - consol_days:i].mean() < volume.iloc[i - prior_days:i - consol_days].mean()
+            daily_range = (stock['High'].iloc[i - prior_days:i] - stock['Low'].iloc[i - prior_days:i]) / stock['Close'].shift(1).iloc[i - prior_days:i]
+            adr = daily_range.mean() * 100
+            breakout = (i == -1) and (close.iloc[-1] > recent_high) and (close.iloc[-2] <= recent_high)
+            breakout_volume = (i == -1) and (volume.iloc[-1] > volume.iloc[-10:].mean() * 1.5)
             
             if prior_rise > min_rise and consolidation_range < max_range and adr > min_adr:
                 results.append({
                     'Ticker': ticker,
                     'Date': dates[i].strftime('%Y-%m-%d'),
-                    'Price': close[i],
+                    'Price': close.iloc[i],
                     'Prior_Rise_%': prior_rise,
                     'Consolidation_Range_%': consolidation_range,
                     'ADR_%': adr,
