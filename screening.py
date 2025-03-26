@@ -89,22 +89,19 @@ def analyze_stock(args):
     has_match = False
 
     for i in range(-30, 0):
-        # 計算 22 日漲幅
-        if i - 22 < -len(close):  # 檢查 22 天前的索引是否超出數據範圍
+        if i - 22 < -len(close):
             rise_22 = 0
         else:
             price_22_days_ago = close.iloc[i - 22]
             current_price = close.iloc[i]
             rise_22 = ((current_price - price_22_days_ago) / price_22_days_ago) * 100 if price_22_days_ago != 0 else 0
 
-        # 計算 67 日漲幅
-        if i - 67 < -len(close):  # 檢查 67 天前的索引是否超出數據範圍
+        if i - 67 < -len(close):
             rise_67 = 0
         else:
             price_67_days_ago = close.iloc[i - 67]
             rise_67 = ((current_price - price_67_days_ago) / price_67_days_ago) * 100 if price_67_days_ago != 0 else 0
 
-        # 計算盤整範圍和 ADR
         recent_high = close.iloc[i - consol_days:i].max()
         recent_low = close.iloc[i - consol_days:i].min()
         consolidation_range = (recent_high / recent_low - 1) * 100 if recent_low != 0 else float('inf')
@@ -128,7 +125,6 @@ def analyze_stock(args):
         breakout = (i == -1) and (close.iloc[-1] > recent_high) and (close.iloc[-2] <= recent_high)
         breakout_volume = (i == -1) and (volume.iloc[-1] > volume.iloc[-10:].mean() * 1.5)
         
-        # 檢查篩選條件
         if rise_22 >= min_rise_22 and rise_67 >= min_rise_67 and consolidation_range <= max_range and adr >= min_adr:
             has_match = True
             results.append({
