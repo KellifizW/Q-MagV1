@@ -6,39 +6,16 @@ import streamlit as st
 
 def get_nasdaq_100():
     try:
-        # 從 Wikipedia 獲取所有表格
         tables = pd.read_html('https://en.wikipedia.org/wiki/Nasdaq-100')
-        st.write(f"從 Wikipedia 獲取到 {len(tables)} 個表格")
-        
-        # 遍歷所有表格，尋找包含股票代碼的表格
-        for i, df in enumerate(tables):
-            columns = df.columns.tolist()
-            st.write(f"表格 {i} 的列名: {columns}")
-            
-            # 檢查是否有 'Ticker' 或類似列名（如 'Symbol'）
-            ticker_col = None
-            for col in columns:
-                if str(col).lower() in ['ticker', 'symbol']:
-                    ticker_col = col
-                    break
-            
-            if ticker_col:
-                tickers = df[ticker_col].tolist()
-                # 過濾無效值並確保是字符串
-                tickers = [str(ticker) for ticker in tickers if pd.notna(ticker) and str(ticker).strip()]
-                st.write(f"在表格 {i} 中找到股票清單，包含 {len(tickers)} 隻股票")
-                return tickers
-        
-        # 如果沒有找到合適的表格
-        st.error("未找到包含 'Ticker' 或 'Symbol' 列的表格")
-        raise ValueError("未找到股票清單表格")
-    
+        df = tables[4]  # 直接使用表格 4
+        if 'Ticker' not in df.columns:
+            raise KeyError("未找到 'Ticker' 列")
+        tickers = df['Ticker'].tolist()
+        return [str(ticker) for ticker in tickers if pd.notna(ticker) and str(ticker).strip()]
     except Exception as e:
         st.error(f"無法從 Wikipedia 獲取 Nasdaq-100 清單: {str(e)}")
-        # 返回更完整的後備清單
         backup = ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA', 'TSLA', 'META', 'ADBE', 'PYPL', 'INTC',
                   'NFLX', 'CSCO', 'PEP', 'AVGO', 'COST', 'TMUS', 'AMD', 'TXN', 'QCOM', 'AMGN']
-        st.write(f"使用後備清單，包含 {len(backup)} 隻股票")
         return backup
 
 def get_sp500():
