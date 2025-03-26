@@ -1,26 +1,38 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from screening import screen_stocks, fetch_stock_data, nasdaq_100
+from screening import screen_stocks, fetch_stock_data, get_nasdaq_100, get_sp500
 
 st.title("Qullamaggie Breakout Screener")
 
 # 用戶輸入參數
 st.sidebar.header("篩選參數")
+index_option = st.sidebar.selectbox("選擇股票池", ["NASDAQ 100", "S&P 500"])
 prior_days = st.sidebar.slider("前段上升天數", 10, 30, 20)
 consol_days = st.sidebar.slider("盤整天數", 5, 15, 10)
-min_rise = st.sidebar.slider("最小漲幅 (%)", 20, 50, 30)
-max_range = st.sidebar.slider("最大盤整範圍 (%)", 3, 10, 5)
-min_adr = st.sidebar.slider("最小 ADR (%)", 3, 10, 5)
+min_rise = st.sidebar.slider("最小漲幅 (%)", 10, 50, 30, help="降低此值以獲得更多結果")
+max_range = st.sidebar.slider("最大盤整範圍 (%)", 3, 15, 5, help="增加此值以放寬整理區間")
+min_adr = st.sidebar.slider("最小 ADR (%)", 2, 10, 5, help="降低此值以納入更多股票")
+
+# 選擇股票池
+if index_option == "NASDAQ 100":
+    tickers = get_nasdaq_100()
+else:
+    tickers = get_sp500()
 
 # 篩選股票
 if st.button("運行篩選"):
     with st.spinner("篩選中..."):
-        df = screen_stocks(nasdaq_100, prior_days, consol_days, min_rise, max_range, min_adr)
+        df = screen_stocks(tickers, prior_days, consol_days, min_rise, max_range, min_adr)
         if df.empty:
-            st.warning("無符合條件的股票")
+            st.warning("無符合條件的股票。請嘗試以下調整：")
+            st.write("- **降低最小漲幅** (目前: {}%)：嘗試設為 10-20%".format(min_rise))
+            st.write("- **增加最大盤整範圍** (目前: {}%)：嘗試設為 10-15%".format(max_range))
+            st.write("- **降低最小 ADR** (目前: {}%)：嘗試設為 2-3%".format(min_adr))
+            st.write("- **擴大股票池**：選擇 S&P 500 (約 500 隻股票)")
         else:
             st.session_state['df'] = df
+            st.success(f"找到 {len(df)} 隻符合條件的股票")
 
 # 顯示結果
 if 'df' in st.session_state:
@@ -53,4 +65,4 @@ if 'df' in st.session_state:
     else:
         st.info("當前無突破股票")
 
-st.write("篩選範圍：NASDAQ 100")
+st.write(f"篩選範圍：{index_option} ({len(tickers)} 隻股票)")
