@@ -3,8 +3,8 @@ import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 import streamlit as st
-import time
 import pandas_market_calendars as mcal
+import time
 
 def get_nasdaq_100():
     try:
@@ -46,6 +46,117 @@ def get_trading_days(end_date, num_trading_days):
     return start_date.date(), end_date
 
 @st.cache_data(ttl=3600)
+def fetch_stock_data_batch(tickers, trading_days=70):
+    """批量下載股票數據並返回完整的 DataFrame"""
+    end_date = datetime(2025, 3, 26).date()
+    try:
+        start_date, end_date = get_trading_days(end_date, trading_days)
+    except Exception as e:
+        st.error(f"無法計算交易日範圍：{str(e)}")
+        return None
+    
+    try:
+        data = yf.download(tickers, start=start_date, end=end_date, group_by="ticker", progress=False, timeout=15)
+        if data.empty:
+            st.error("批量下載數據為空")
+            return None
+        st.write(f"批量下載完成，數據長度：{len(data)} 筆，股票數量：{len(tickers)}")
+        return data
+    except Exception as e:
+        st.error(f"批量下載數據失敗：{str(e)}")
+        return None
+
+def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5):
+    """批量分析股票數據，返回符合條件的結果"""
+    results = []
+    failed_stocks = {}
+    required_days = prior_days + consol_days + 30
+    
+    for ticker in tickers:
+        try:
+            # 提取單一股票數據
+            if isinstance(data.columns, pd.MultiIndex):
+                stock = data[ticker]
+            else:
+                stock = data
+            
+            if stock['Close'].isna().all() or len(stock) < required_days:
+                failed_stocks[ticker] = f"數據不足或無效，長度 {len(stock)}，需 {required_days}"
+                continue
+            
+            close = stock['Close']
+            volume = stock['Volume']
+            high = stock['High']
+            low = stock['Low']
+            prev_close = close.shift(1)
+            dates = stock.index
+            
+            # 向量計算指標
+            rise_22 = (close / close.shift(22) - 1) * 100
+            rise_67 = (close / close.shift(67) - 1) * 100
+            recent_high = close.rolling(consol_days).max()
+            recent_low = close.rolling(consol_days).min()
+            consolidation_range = (recent_high / recent_low - 1) * 100
+            vol_decline = volume.rolling(consol_days).mean() < volume.shift(consol_days).rolling(prior_days).mean()
+            daily_range = (high - low) / prev_close
+            adr = daily_range.rolling(prior_days).mean() * 100
+            breakout = (close > recent_high.shift(1)) & (close.shift(1) <= recent_high.shift(1))
+            breakout_volume = volume > volume.rolling(10).mean() * 1.5
+            
+            # 篩選條件
+            mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & \
+                   (consolidation_range <= max_range) & (adr >= min_adr)
+            
+            if mask.any():
+                matched = pd.DataFrame({
+                    'Ticker': ticker,
+                    'Date': dates[mask],
+                    'Price': close[mask],
+                    'Prior_Rise_22_%': rise_22[mask],
+                    'Prior_Rise_67_%': rise_67[mask],
+                    'Consolidation_Range_%': consolidation_range[mask],
+                    'ADR_%': adr[mask],
+                    'Breakout': breakout[mask],
+                    'Breakout_Volume': breakout_volume[mask]
+                })
+                results.append(matched)
+                st.write(f"股票 {ticker} 符合條件（最新）：22 日漲幅 = {rise_22.iloc[-1]:.2f}%, "
+                         f"67 日漲幅 = {rise_67.iloc[-1]:.2f}%, 盤整範圍 = {consolidation_range.iloc[-1]:.2f}%, "
+                         f"ADR = {adr.iloc[-1]:.2f}%")
+            else:
+                st.write(f"股票 {ticker} 不符合條件：22 日漲幅 = {rise_22.iloc[-1]:.2f}% (需 >= {min_rise_22}), "
+                         f"67 日漲幅 = {rise_67.iloc[-1]:.2f}% (需 >= {min_rise_67}), "
+                         f"盤整範圍 = {consolidation_range.iloc[-1]:.2f}% (需 <= {max_range}), "
+                         f"ADR = {adr.iloc[-1]:.2f}% (需 >= {min_adr})")
+                
+        except Exception as e:
+            failed_stocks[ticker] = f"分析失敗：{str(e)}"
+    
+    if failed_stocks:
+        st.warning(f"無法分析的股票：{failed_stocks}")
+    
+    return pd.concat(results) if results else pd.DataFrame()
+
+def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5, progress_bar=None):
+    """主篩選函數，返回篩選結果並保留批量數據供可視化使用"""
+    # 批量下載數據
+    data = fetch_stock_data_batch(tickers, trading_days=70)
+    if data is None:
+        return pd.DataFrame()
+    
+    # 批量分析
+    total_tickers = len(tickers)
+    results = analyze_stock_batch(data, tickers, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr)
+    
+    if progress_bar:
+        progress_bar.progress(1.0)
+    
+    # 將批量數據存入 session_state 供可視化使用
+    st.session_state['stock_data'] = data
+    
+    return results
+
+# 保留原始 fetch_stock_data 以兼容性測試（可選）
 def fetch_stock_data(ticker, trading_days=70):
     max_retries = 3
     end_date = datetime(2025, 3, 26).date()
@@ -53,15 +164,15 @@ def fetch_stock_data(ticker, trading_days=70):
         start_date, end_date = get_trading_days(end_date, trading_days)
     except Exception as e:
         st.error(f"無法計算交易日範圍：{str(e)}")
-        return None
+        return None, str(e)
 
     for attempt in range(max_retries):
         try:
             stock = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=False, timeout=15)
             if stock.empty:
-                return None, f"數據為空"
+                return None, "數據為空"
             if 'Close' not in stock.columns or 'Volume' not in stock.columns:
-                return None, f"缺少 'Close' 或 'Volume' 欄位"
+                return None, "缺少 'Close' 或 'Volume' 欄位"
             return stock, None
         except Exception as e:
             if attempt < max_retries - 1:
@@ -69,117 +180,3 @@ def fetch_stock_data(ticker, trading_days=70):
                 time.sleep(2)
             else:
                 return None, f"重試 {max_retries} 次後仍失敗：{str(e)}"
-
-def analyze_stock(args):
-    ticker, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr = args
-    stock, error = fetch_stock_data(ticker, trading_days=70)
-    required_days = prior_days + consol_days + 30
-    if stock is None:
-        return None, ticker, error
-    if len(stock) < required_days:
-        error = f"數據不足，實際長度 {len(stock)} 天，需至少 {required_days} 天"
-        return None, ticker, error
-    
-    close = stock['Close'].squeeze()
-    volume = stock['Volume'].squeeze()
-    dates = stock.index
-    
-    results = []
-    messages = []
-    has_match = False
-
-    for i in range(-30, 0):
-        if i - 22 < -len(close):
-            rise_22 = 0
-        else:
-            price_22_days_ago = close.iloc[i - 22]
-            current_price = close.iloc[i]
-            rise_22 = ((current_price - price_22_days_ago) / price_22_days_ago) * 100 if price_22_days_ago != 0 else 0
-
-        if i - 67 < -len(close):
-            rise_67 = 0
-        else:
-            price_67_days_ago = close.iloc[i - 67]
-            rise_67 = ((current_price - price_67_days_ago) / price_67_days_ago) * 100 if price_67_days_ago != 0 else 0
-
-        recent_high = close.iloc[i - consol_days:i].max()
-        recent_low = close.iloc[i - consol_days:i].min()
-        consolidation_range = (recent_high / recent_low - 1) * 100 if recent_low != 0 else float('inf')
-        vol_decline = volume.iloc[i - consol_days:i].mean() < volume.iloc[i - prior_days:i - consol_days].mean()
-        
-        high = stock['High'].squeeze().iloc[i - prior_days:i]
-        low = stock['Low'].squeeze().iloc[i - prior_days:i]
-        prev_close = stock['Close'].shift(1).squeeze().iloc[i - prior_days:i]
-        
-        if high.empty or low.empty or prev_close.empty:
-            adr = 0
-        else:
-            is_all_nan = prev_close.isna().all()
-            if is_all_nan:
-                adr = 0
-            else:
-                daily_range = (high - low) / prev_close
-                adr_mean = daily_range.mean()
-                adr = adr_mean * 100 if not pd.isna(adr_mean) else 0
-        
-        breakout = (i == -1) and (close.iloc[-1] > recent_high) and (close.iloc[-2] <= recent_high)
-        breakout_volume = (i == -1) and (volume.iloc[-1] > volume.iloc[-10:].mean() * 1.5)
-        
-        if rise_22 >= min_rise_22 and rise_67 >= min_rise_67 and consolidation_range <= max_range and adr >= min_adr:
-            has_match = True
-            results.append({
-                'Ticker': ticker,
-                'Date': dates[i].strftime('%Y-%m-%d'),
-                'Price': close.iloc[i],
-                'Prior_Rise_22_%': rise_22,
-                'Prior_Rise_67_%': rise_67,
-                'Consolidation_Range_%': consolidation_range,
-                'ADR_%': adr,
-                'Breakout': breakout,
-                'Breakout_Volume': breakout_volume
-            })
-            messages.append(f"股票 {ticker} 符合條件：22 日漲幅 = {rise_22:.2f}%, 67 日漲幅 = {rise_67:.2f}%, 盤整範圍 = {consolidation_range:.2f}%, ADR = {adr:.2f}%")
-        else:
-            messages.append(f"股票 {ticker} 不符合條件：22 日漲幅 = {rise_22:.2f}% (需 >= {min_rise_22}), 67 日漲幅 = {rise_67:.2f}% (需 >= {min_rise_67}), 盤整範圍 = {consolidation_range:.2f}% (需 <= {max_range}), ADR = {adr:.2f}% (需 >= {min_adr})")
-
-    if messages:
-        if has_match:
-            for msg in reversed(messages):
-                if "符合條件" in msg:
-                    st.write(msg)
-                    break
-        else:
-            st.write(messages[-1])
-
-    return results, None, None
-
-def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5, progress_bar=None):
-    total_tickers = len(tickers)
-    results = []
-    failed_stocks = {}
-
-    for i, ticker in enumerate(tickers):
-        try:
-            result, failed_ticker, error = analyze_stock((ticker, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr))
-            if result:
-                results.extend(result)
-            if failed_ticker and error:
-                if error in failed_stocks:
-                    failed_stocks[error].append(failed_ticker)
-                else:
-                    failed_stocks[error] = [failed_ticker]
-        except Exception as e:
-            error = f"處理時發生錯誤：{str(e)}"
-            if error in failed_stocks:
-                failed_stocks[error].append(ticker)
-            else:
-                failed_stocks[error] = [ticker]
-        if progress_bar:
-            progress_bar.progress(min((i + 1) / total_tickers, 1.0))
-        time.sleep(0.05)
-
-    if failed_stocks:
-        for error, tickers in failed_stocks.items():
-            st.warning(f"無法獲取以下股票的數據：{tickers}，原因：{error}")
-
-    return pd.DataFrame(results)
