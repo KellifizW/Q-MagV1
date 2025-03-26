@@ -30,7 +30,7 @@ consol_days = st.sidebar.slider("盤整天數", 5, 15, 10)
 min_rise = st.sidebar.slider("最小漲幅 (%)", 0, 50, 0, help="設為 0 以獲得更多結果")
 max_range = st.sidebar.slider("最大盤整範圍 (%)", 3, 15, 10, help="增加此值以放寬整理區間")
 min_adr = st.sidebar.slider("最小 ADR (%)", 0, 10, 0, help="設為 0 以納入更多股票")
-max_stocks = st.sidebar.slider("最大篩選股票數量", 50, 1000, 100, help="限制股票數量以加快處理速度，僅適用於 NASDAQ All")
+max_stocks = st.sidebar.slider("最大篩選股票數量", 10, 500, 50, help="限制股票數量以加快處理速度，僅適用於 NASDAQ All")
 
 # 選擇股票池
 if index_option == "NASDAQ 100":
@@ -92,8 +92,8 @@ if 'df' in st.session_state:
         top_5_tickers = top_5_df['Ticker'].tolist()
         
         for ticker in top_5_tickers:
-            stock_data = fetch_stock_data(ticker, days=90)  # 獲取近 3 個月數據
-            if stock_data is not None:
+            stock_data = fetch_stock_data(ticker, days=90)
+            if stock_data is not None and not stock_data.empty and len(stock_data) >= 10:
                 # 計算 10 日均線
                 stock_data['MA10'] = stock_data['Close'].rolling(window=10).mean()
                 
@@ -114,7 +114,7 @@ if 'df' in st.session_state:
                 )
                 st.plotly_chart(fig)
             else:
-                st.error(f"無法獲取 {ticker} 的數據")
+                st.error(f"無法獲取 {ticker} 的數據或數據不足以繪製圖表（需至少 10 天數據）")
     
     # 顯示突破股票的圖表
     breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume']]
@@ -122,7 +122,7 @@ if 'df' in st.session_state:
         st.subheader("當前突破股票（可買入）")
         for ticker in breakout_df['Ticker'].unique():
             stock_data = fetch_stock_data(ticker)
-            if stock_data is not None:
+            if stock_data is not None and not stock_data.empty:
                 recent_high = stock_data['Close'][-consol_days-1:-1].max()
                 recent_low = stock_data['Close'][-consol_days-1:-1].min()
                 
