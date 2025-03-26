@@ -2,6 +2,7 @@ import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 from multiprocessing import Pool
+import streamlit as st
 
 def get_nasdaq_100():
     try:
@@ -13,8 +14,16 @@ def get_sp500():
     try:
         return pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]['Symbol'].tolist()
     except Exception:
+        return get_nasdaq_100()
+
+def get_nasdaq_all():
+    try:
+        nasdaq = pd.read_csv('https://old.nasdaq.com/screening/companies-by-name.aspx?letter=0&exchange=nasdaq&render=download')
+        return nasdaq['Symbol'].tolist()
+    except Exception:
         return get_nasdaq_100()  # 後備使用 NASDAQ 100
 
+@st.cache_data(ttl=3600)  # 快取 1 小時
 def fetch_stock_data(ticker, days=90):
     end_date = datetime.today()
     start_date = end_date - timedelta(days=days)
