@@ -9,12 +9,14 @@ def plot_top_5_stocks(top_5_tickers):
     """繪製前 5 名股票的走勢圖（包含股價、成交量、10 日均線和 MACD）。"""
     for ticker in top_5_tickers:
         st.write(f"正在處理股票 {ticker}...")
-        stock_data = fetch_stock_data(ticker, trading_days=90)
+        stock_data, error = fetch_stock_data(ticker, trading_days=70)  # 解包返回值，統一使用 70 個交易日
         
         # 檢查數據是否成功獲取
         if stock_data is None:
-            st.error(f"無法繪製 {ticker} 的圖表：fetch_stock_data 返回 None")
+            st.error(f"無法繪製 {ticker} 的圖表：{error}")
             continue
+        
+        # 檢查數據是否為空
         if stock_data.empty:
             st.error(f"無法繪製 {ticker} 的圖表：數據為空")
             continue
@@ -241,12 +243,14 @@ def plot_breakout_stocks(breakout_tickers, consol_days):
     """繪製突破股票的圖表（包含股價、阻力位、支撐位、買入信號、成交量和 MACD）。"""
     for ticker in breakout_tickers:
         st.write(f"正在處理突破股票 {ticker}...")
-        stock_data = fetch_stock_data(ticker)
+        stock_data, error = fetch_stock_data(ticker, trading_days=70)  # 解包返回值，顯式指定 70 個交易日
         
         # 檢查數據是否成功獲取
         if stock_data is None:
-            st.error(f"無法繪製 {ticker} 的圖表：fetch_stock_data 返回 None")
+            st.error(f"無法繪製 {ticker} 的圖表：{error}")
             continue
+        
+        # 檢查數據是否為空
         if stock_data.empty:
             st.error(f"無法繪製 {ticker} 的圖表：數據為空")
             continue
@@ -281,6 +285,12 @@ def plot_breakout_stocks(breakout_tickers, consol_days):
             st.error(f"無法繪製 {ticker} 的圖表：'Volume' 欄位不是 Pandas Series，類型為 {type(stock_data['Volume'])}")
             continue
         
+        # 檢查數據長度是否滿足要求（至少需要 consol_days + 1 天來計算盤整區間）
+        min_required_length = max(consol_days + 1, 26)  # 26 是因為 MACD 需要至少 26 天數據
+        if len(stock_data) < min_required_length:
+            st.error(f"無法繪製 {ticker} 的圖表：數據長度 {len(stock_data)} 小於最小要求 {min_required_length}")
+            continue
+        
         try:
             # 計算最近盤整區間的阻力位和支撐位
             recent_high = stock_data['Close'][-consol_days-1:-1].max()
@@ -291,6 +301,9 @@ def plot_breakout_stocks(breakout_tickers, consol_days):
                 st.warning(f"{ticker} 的數據中包含 NaN 值，將進行清理")
                 stock_data = stock_data.dropna()
                 st.write(f"清理後 {ticker} 數據長度：{len(stock_data)} 筆")
+                if len(stock_data) < min_required_length:
+                    st.error(f"清理後 {ticker} 的數據長度 {len(stock_data)} 小於最小要求 {min_required_length}")
+                    continue
             
             # 提取日期、股價和成交量，確保日期格式乾淨
             dates = [date.strftime("%Y-%m-%d") for date in stock_data.index]
