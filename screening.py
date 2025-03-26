@@ -3,7 +3,6 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from multiprocessing import Pool
 
-# 動態獲取 NASDAQ 100 成分股
 def get_nasdaq_100():
     try:
         return pd.read_html('https://en.wikipedia.org/wiki/Nasdaq-100')[4]['Ticker'].tolist()
@@ -23,9 +22,8 @@ def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=
     if stock is None or len(stock) < prior_days + consol_days + 30:
         return None
     
-    # 確保使用 Series
-    close = stock['Close'].squeeze()  # 轉為 Series
-    volume = stock['Volume'].squeeze()  # 轉為 Series
+    close = stock['Close'].squeeze()
+    volume = stock['Volume'].squeeze()
     dates = stock.index
     
     results = []
@@ -37,31 +35,19 @@ def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=
             consolidation_range = (recent_high / recent_low - 1) * 100
             vol_decline = volume.iloc[i - consol_days:i].mean() < volume.iloc[i - prior_days:i - consol_days].mean()
             
-            # 明確提取 Series
             high = stock['High'].squeeze().iloc[i - prior_days:i]
             low = stock['Low'].squeeze().iloc[i - prior_days:i]
             prev_close = stock['Close'].shift(1).squeeze().iloc[i - prior_days:i]
             
-            # 除錯資訊
-            print(f"Ticker: {ticker}, i: {i}")
-            print(f"high type: {type(high)}, length: {len(high)}")
-            print(f"low type: {type(low)}, length: {len(low)}")
-            print(f"prev_close type: {type(prev_close)}, length: {len(prev_close)}")
-            
-            # 逐步檢查數據
             if high.empty or low.empty or prev_close.empty:
-                print(f"{ticker}: Data empty at i={i}")
                 adr = 0
             else:
-                is_all_nan = prev_close.isna().all()  # 對 Series 運行，應返回布林值
-                print(f"{ticker}: is_all_nan type: {type(is_all_nan)}, value: {is_all_nan}")
+                is_all_nan = prev_close.isna().all()
                 if is_all_nan:
-                    print(f"{ticker}: prev_close all NaN at i={i}")
                     adr = 0
                 else:
                     daily_range = (high - low) / prev_close
                     adr_mean = daily_range.mean()
-                    print(f"{ticker}: daily_range type: {type(daily_range)}, mean: {adr_mean}")
                     adr = adr_mean * 100 if not pd.isna(adr_mean) else 0
             
             breakout = (i == -1) and (close.iloc[-1] > recent_high) and (close.iloc[-2] <= recent_high)
