@@ -36,12 +36,12 @@ def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=
             consolidation_range = (recent_high / recent_low - 1) * 100
             vol_decline = volume.iloc[i - consol_days:i].mean() < volume.iloc[i - prior_days:i - consol_days].mean()
             
-            # 分步計算 ADR，確保純量
+            # 分步計算 ADR
             high = stock['High'].iloc[i - prior_days:i]
             low = stock['Low'].iloc[i - prior_days:i]
             prev_close = stock['Close'].shift(1).iloc[i - prior_days:i]
             
-            # 檢查數據完整性
+            # 檢查數據完整性並計算 ADR
             if high.empty or low.empty or prev_close.empty or prev_close.isna().all():
                 adr = 0
             else:
