@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 from screening import screen_stocks, fetch_stock_data, nasdaq_100
 
 st.title("Qullamaggie Breakout Screener")
@@ -17,7 +17,10 @@ min_adr = st.sidebar.slider("最小 ADR (%)", 3, 10, 5)
 if st.button("運行篩選"):
     with st.spinner("篩選中..."):
         df = screen_stocks(nasdaq_100, prior_days, consol_days, min_rise, max_range, min_adr)
-        st.session_state['df'] = df
+        if df.empty:
+            st.warning("無符合條件的股票")
+        else:
+            st.session_state['df'] = df
 
 # 顯示結果
 if 'df' in st.session_state:
@@ -25,24 +28,29 @@ if 'df' in st.session_state:
     st.subheader("篩選結果")
     st.dataframe(df[['Ticker', 'Date', 'Price', 'Prior_Rise_%', 'Consolidation_Range_%', 'ADR_%', 'Breakout']])
     
-    # 選擇股票繪圖
-    breakout_stocks = df[df['Breakout'] & df['Breakout_Volume']]['Ticker'].unique()
-    selected_ticker = st.selectbox("選擇股票查看圖表", breakout_stocks)
-    
-    if selected_ticker:
-        stock_data = fetch_stock_data(selected_ticker)
-        recent_high = stock_data['Close'][-consol_days-1:-1].max()
-        recent_low = stock_data['Close'][-consol_days-1:-1].min()
-        
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(stock_data.index, stock_data['Close'], label='Price')
-        ax.axhline(recent_high, color='r', linestyle='--', label='Resistance')
-        ax.axhline(recent_low, color='g', linestyle='--', label='Support')
-        ax.axvline(stock_data.index[-1], color='b', linestyle='-', label='Breakout')
-        ax.set_title(f"{selected_ticker} Breakout Chart")
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Price")
-        ax.legend()
-        st.pyplot(fig)
+    # 顯示突破股票的圖表
+    breakout_df = df[df['Breakout'] & df['Breakout_Volume']]
+    if not breakout_df.empty:
+        st.subheader("當前突破股票")
+        for ticker in breakout_df['Ticker'].unique():
+            stock_data = fetch_stock_data(ticker)
+            if stock_data is not None:
+                recent_high = stock_data['Close'][-consol_days-1:-1].max()
+                recent_low = stock_data['Close'][-consol_days-1:-1].min()
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=stock_data.index, y=stock_data['Close'], mode='lines', name='Price'))
+                fig.add_trace(go.Scatter(x=[stock_data.index[0], stock_data.index[-1]], y=[recent_high, recent_high], 
+                                        mode='lines', line=dict(dash='dash', color='red'), name='Resistance'))
+                fig.add_trace(go.Scatter(x=[stock_data.index[0], stock_data.index[-1]], y=[recent_low, recent_low], 
+                                        mode='lines', line=dict(dash='dash', color='green'), name='Support'))
+                fig.add_trace(go.Scatter(x=[stock_data.index[-1]], y=[stock_data['Close'][-1]], mode='markers', 
+                                        marker=dict(size=10, color='blue'), name='Breakout'))
+                fig.update_layout(title=f"{ticker} Breakout Chart", xaxis_title="Date", yaxis_title="Price")
+                st.plotly_chart(fig)
+            else:
+                st.error(f"無法獲取 {ticker} 的數據")
+    else:
+        st.info("當前無突破股票")
 
-st.write("預設篩選範圍：NASDAQ 100")
+st.write("篩選範圍：NASDAQ 100")
