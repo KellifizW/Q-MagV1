@@ -3,4 +3,3 @@ pandas
 yfinance
 plotly
 lxml
-retrying
