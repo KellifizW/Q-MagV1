@@ -75,6 +75,8 @@ if submit_button:
         progress_bar = st.progress(0)
         df = screen_stocks(tickers, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr, progress_bar)
         progress_bar.progress(100)
+        if 'stock_data' in st.session_state:
+            st.write(f"批量數據已載入，涵蓋 {len(st.session_state['stock_data'].columns.get_level_values(1))} 檔股票")
         if df.empty:
             st.warning("無符合條件的股票。請嘗試以下調整：")
             st.write("- **降低 22 日內最小漲幅** (目前: {}%)：嘗試設為 0-10%".format(min_rise_22))
