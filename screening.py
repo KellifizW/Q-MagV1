@@ -3,8 +3,15 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from multiprocessing import Pool
 
-# NASDAQ 100 成分股（可從網上下載或硬編碼）
-nasdaq_100 = ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA', 'TSLA', ...]  # 假設有完整清單
+# 動態獲取 NASDAQ 100 成分股
+def get_nasdaq_100():
+    try:
+        # 注意：yfinance 目前不直接提供 NDX 成分股，這裡使用維基百科作為備用
+        return pd.read_html('https://en.wikipedia.org/wiki/Nasdaq-100')[4]['Ticker'].tolist()
+    except Exception:
+        return ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA', 'TSLA', 'META', 'ADBE', 'PYPL', 'INTC']
+
+nasdaq_100 = get_nasdaq_100()
 
 def fetch_stock_data(ticker, days=90):
     end_date = datetime.today()
@@ -22,7 +29,7 @@ def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=
     dates = stock.index
     
     results = []
-    for i in range(-30, 0):  # 過去 30 日
+    for i in range(-30, 0):
         if i < -prior_days:
             prior_rise = (close[i] / close[i-prior_days] - 1) * 100
             recent_high = close[i-consol_days:i].max()
