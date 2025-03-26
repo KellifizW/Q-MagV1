@@ -102,6 +102,9 @@ if 'df' in st.session_state:
         else "盤整中" if row['Consolidation_Range_%'] < max_range
         else "前段上升", axis=1
     )
+    # 檢查 latest_df 的欄位
+    st.write("篩選結果的欄位：", latest_df.columns.tolist())
+    
     # 重命名欄位以更直觀
     display_df = latest_df.rename(columns={
         'Ticker': '股票代碼',
@@ -114,19 +117,41 @@ if 'df' in st.session_state:
         'Breakout': '是否突破',
         'Breakout_Volume': '突破成交量'
     })
-    st.dataframe(display_df[['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']])
+    
+    # 定義要顯示的欄位
+    desired_columns = ['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']
+    # 檢查哪些欄位存在
+    available_columns = [col for col in desired_columns if col in display_df.columns]
+    missing_columns = [col for col in desired_columns if col not in display_df.columns]
+    
+    if missing_columns:
+        st.warning(f"以下欄位在篩選結果中缺失：{missing_columns}")
+        st.write("可能原因：")
+        st.write("- 篩選條件過嚴（例如 22 日內最小漲幅或 67 日內最小漲幅過高），導致無股票符合條件。")
+        st.write("- 數據下載失敗，部分股票數據缺失。")
+        st.write("建議：")
+        st.write("- 降低 22 日內最小漲幅或 67 日內最小漲幅。")
+        st.write("- 檢查網絡連線，確保數據下載正常。")
+    
+    if available_columns:
+        st.dataframe(display_df[available_columns])
+    else:
+        st.error("無可顯示的欄位，請檢查篩選條件或數據來源。")
     
     # 繪製符合條件的股票走勢圖
     unique_tickers = latest_df['Ticker'].unique()
     if len(unique_tickers) > 0:  # 只要有符合條件的股票就繪製圖表
         st.subheader("符合條件的股票走勢（按 22 日內漲幅排序）")
         # 按 22 日內漲幅排序
-        top_df = latest_df.groupby('Ticker').agg({'Prior_Rise_22_%': 'max'}).reset_index()
-        top_df = top_df.sort_values(by='Prior_Rise_22_%', ascending=False)
-        # 如果股票數量大於 5，則只取前 5 隻；否則取所有股票
-        num_to_display = min(len(unique_tickers), 5)
-        top_tickers = top_df['Ticker'].head(num_to_display).tolist()
-        plot_top_5_stocks(top_tickers)
+        if 'Prior_Rise_22_%' in latest_df.columns:
+            top_df = latest_df.groupby('Ticker').agg({'Prior_Rise_22_%': 'max'}).reset_index()
+            top_df = top_df.sort_values(by='Prior_Rise_22_%', ascending=False)
+            # 如果股票數量大於 5，則只取前 5 隻；否則取所有股票
+            num_to_display = min(len(unique_tickers), 5)
+            top_tickers = top_df['Ticker'].head(num_to_display).tolist()
+            plot_top_5_stocks(top_tickers)
+        else:
+            st.warning("無法繪製圖表：缺少 'Prior_Rise_22_%' 欄位，無法排序股票。")
     
     # 繪製突破股票圖表
     breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume']]
