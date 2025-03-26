@@ -63,7 +63,7 @@ if 'df' in st.session_state:
     df = st.session_state['df']
     st.subheader("篩選結果")
     # 只顯示最近一天的數據
-    latest_df = df[df['Date'] == df['Date'].max()].copy()  # 創建副本以避免 SettingWithCopyWarning
+    latest_df = df[df['Date'] == df['Date'].max()].copy()
     # 添加狀態欄位
     latest_df.loc[:, 'Status'] = latest_df.apply(
         lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume']
