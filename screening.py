@@ -36,14 +36,17 @@ def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=
             consolidation_range = (recent_high / recent_low - 1) * 100
             vol_decline = volume.iloc[i - consol_days:i].mean() < volume.iloc[i - prior_days:i - consol_days].mean()
             
-            # 分步計算 ADR
+            # 分步計算 ADR，確保純量
             high = stock['High'].iloc[i - prior_days:i]
             low = stock['Low'].iloc[i - prior_days:i]
             prev_close = stock['Close'].shift(1).iloc[i - prior_days:i]
-            daily_range = (high - low) / prev_close  # Series
-            adr = daily_range.mean() * 100  # 純量平均值
-            if pd.isna(adr):  # 處理 NaN
+            
+            # 檢查數據完整性
+            if high.empty or low.empty or prev_close.empty or prev_close.isna().all():
                 adr = 0
+            else:
+                daily_range = (high - low) / prev_close
+                adr = daily_range.mean() * 100 if not pd.isna(daily_range.mean()) else 0
             
             breakout = (i == -1) and (close.iloc[-1] > recent_high) and (close.iloc[-2] <= recent_high)
             breakout_volume = (i == -1) and (volume.iloc[-1] > volume.iloc[-10:].mean() * 1.5)
