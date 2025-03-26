@@ -36,10 +36,10 @@ def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=
             consolidation_range = (recent_high / recent_low - 1) * 100
             vol_decline = volume.iloc[i - consol_days:i].mean() < volume.iloc[i - prior_days:i - consol_days].mean()
             
-            # 分步計算 ADR
-            high = stock['High'].iloc[i - prior_days:i]
-            low = stock['Low'].iloc[i - prior_days:i]
-            prev_close = stock['Close'].shift(1).iloc[i - prior_days:i]
+            # 修正為 Series 而非 DataFrame
+            high = stock['High'].iloc[i - prior_days:i]  # 已是 Series
+            low = stock['Low'].iloc[i - prior_days:i]    # 已是 Series
+            prev_close = stock['Close'].shift(1).iloc[i - prior_days:i]  # 已是 Series
             
             # 除錯資訊
             print(f"Ticker: {ticker}, i: {i}")
@@ -52,7 +52,7 @@ def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=
                 print(f"{ticker}: Data empty at i={i}")
                 adr = 0
             else:
-                is_all_nan = prev_close.isna().all()  # 檢查是否全為 NaN
+                is_all_nan = prev_close.isna().all()  # 應為單一布林值
                 print(f"{ticker}: is_all_nan type: {type(is_all_nan)}, value: {is_all_nan}")
                 if is_all_nan:
                     print(f"{ticker}: prev_close all NaN at i={i}")
