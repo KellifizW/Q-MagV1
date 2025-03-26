@@ -1,7 +1,9 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from screening import screen_stocks, fetch_stock_data, get_nasdaq_100, get_sp500, get_nasdaq_all
+from datetime import datetime, timedelta
 
 st.title("Qullamaggie Breakout Screener")
 
@@ -19,7 +21,7 @@ st.markdown("""
 
 #### 篩選結果說明：
 - 篩選結果顯示最近一天的數據，包含股票的當前狀態（例如「已突破且可買入」、「盤整中」）。
-- 如果有超過 5 隻非重複股票符合條件，將按前段漲幅 (%) 排序，顯示前 5 名的 3 個月走勢圖（包含股價、成交量、10 日均線）。
+- 如果有超過 5 隻非重複股票符合條件，將按前段漲幅 (%) 排序，顯示前 5 名的 3 個月走勢圖（包含股價、成交量、10 日均線及 MACD）。
 """)
 
 # 用戶輸入參數
@@ -101,22 +103,125 @@ if 'df' in st.session_state:
             if stock_data is not None and not stock_data.empty and len(stock_data) >= 10:
                 # 計算 10 日均線
                 stock_data['MA10'] = stock_data['Close'].rolling(window=10).mean()
+                # 計算 MACD 指標
+                ema12 = stock_data["Close"].ewm(span=12, adjust=False).mean()
+                ema26 = stock_data["Close"].ewm(span=26, adjust=False).mean()
+                macd_line = ema12 - ema26
+                macd_signal = macd_line.ewm(span=9, adjust=False).mean()
+                macd_histogram = macd_line - macd_signal
                 
-                fig = go.Figure()
-                # 股價走勢
-                fig.add_trace(go.Scatter(x=stock_data.index, y=stock_data['Close'], mode='lines', name='股價'))
-                # 10 日均線
-                fig.add_trace(go.Scatter(x=stock_data.index, y=stock_data['MA10'], mode='lines', name='10 日均線', line=dict(color='orange')))
-                # 成交量
-                fig.add_trace(go.Bar(x=stock_data.index, y=stock_data['Volume'], name='成交量', yaxis='y2', opacity=0.3))
-                
-                fig.update_layout(
-                    title=f"{ticker} 近 3 個月走勢",
-                    xaxis_title="日期",
-                    yaxis_title="價格",
-                    yaxis2=dict(title="成交量", overlaying='y', side='right'),
-                    showlegend=True
+                # 創建子圖
+                fig = make_subplots(
+                    rows=2, cols=1,
+                    shared_xaxes=True,
+                    vertical_spacing=0.03,
+                    subplot_titles=(f"{ticker} 近 3 個月走勢", "MACD"),
+                    row_heights=[0.7, 0.3],
+                    specs=[[{"secondary_y": True}], [{}]]
                 )
+                
+                # 添加股價線
+                fig.add_trace(
+                    go.Scatter(x
+                    x=stock_data.index,
+                    y=stock_data['Close'],
+                    mode='lines',
+                    name='股價',
+                    line=dict(color='blue'),
+                    hovertemplate="日期: %{x|%Y-%m-%d}<br>股價: %{y:.2f}<br>10 日均線: %{customdata:.2f}",
+                    customdata=stock_data['MA10']
+                ),
+                row=1, col=1, secondary_y=False
+                )
+                # 添加 10 日均線
+                fig.add_trace(
+                    go.Scatter(
+                        x=stock_data.index,
+                        y=stock_data['MA10'],
+                        mode='lines',
+                        name='10 日均線',
+                        line=dict(color='orange'),
+                        hovertemplate="日期: %{x|%Y-%m-%d}<br>10 日均線: %{y:.2f}"
+                    ),
+                    row=1, col=1, secondary_y=False
+                )
+                # 添加成交量
+                fig.add_trace(
+                    go.Bar(
+                        x=stock_data.index,
+                        y=stock_data['Volume'],
+                        name='成交量',
+                        opacity=0.3,
+                        marker_color='pink',
+                        hovertemplate="日期: %{x|%Y-%m-%d}<br>成交量: %{y:,.0f}"
+                    ),
+                    row=1, col=1, secondary_y=True
+                )
+                # 添加 MACD 線
+                fig.add_trace(
+                    go.Scatter(
+                        x=stock_data.index,
+                        y=macd_line,
+                        mode='lines',
+                        name='MACD 線',
+                        line=dict(color='blue'),
+                        hovertemplate="日期: %{x|%Y-%m-%d}<br>MACD: %{y:.2f}"
+                    ),
+                    row=2, col=1
+                )
+                # 添加訊號線
+                fig.add_trace(
+                    go.Scatter(
+                        x=stock_data.index,
+                        y=macd_signal,
+                        mode='lines',
+                        name='訊號線',
+                        line=dict(color='orange'),
+                        hovertemplate="日期: %{x|%Y-%m-%d}<br>訊號線: %{y:.2f}"
+                    ),
+                    row=2, col=1
+                )
+                # 添加 MACD 柱狀圖
+                fig.add_trace(
+                    go.Bar(
+                        x=stock_data.index,
+                        y=macd_histogram,
+                        name='MACD 柱狀圖',
+                        marker_color='gray',
+                        opacity=0.5,
+                        hovertemplate="日期: %{x|%Y-%m-%d}<br>MACD 柱狀圖: %{y:.2f}"
+                    ),
+                    row=2, col=1
+                )
+                
+                # 更新佈局
+                fig.update_layout(
+                    height=800,
+                    showlegend=True,
+                    xaxis_title="日期",
+                    margin=dict(b=100)
+                )
+                fig.update_yaxes(title_text="價格", row=1, col=1, secondary_y=False)
+                fig.update_yaxes(title_text="成交量", row=1, col=1, secondary_y=True)
+                fig.update_yaxes(title_text="MACD", row=2, col=1)
+                
+                # 設置 X 軸刻度
+                tickvals = stock_data.index[::5]
+                fig.update_xaxes(
+                    tickvals=tickvals,
+                    ticktext=[d.strftime('%Y-%m-%d') for d in tickvals],
+                    tickangle=45,
+                    tickfont=dict(size=10),
+                    row=1, col=1
+                )
+                fig.update_xaxes(
+                    tickvals=tickvals,
+                    ticktext=[d.strftime('%Y-%m-%d') for d in tickvals],
+                    tickangle=45,
+                    tickfont=dict(size=10),
+                    row=2, col=1
+                )
+                
                 st.plotly_chart(fig)
             else:
                 st.error(f"無法繪製 {ticker} 的圖表：數據不足或獲取失敗")
@@ -130,24 +235,145 @@ if 'df' in st.session_state:
             if stock_data is not None and not stock_data.empty:
                 recent_high = stock_data['Close'][-consol_days-1:-1].max()
                 recent_low = stock_data['Close'][-consol_days-1:-1].min()
+                # 計算 MACD 指標
+                ema12 = stock_data["Close"].ewm(span=12, adjust=False).mean()
+                ema26 = stock_data["Close"].ewm(span=26, adjust=False).mean()
+                macd_line = ema12 - ema26
+                macd_signal = macd_line.ewm(span=9, adjust=False).mean()
+                macd_histogram = macd_line - macd_signal
                 
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=stock_data.index, y=stock_data['Close'], mode='lines', name='價格'))
-                fig.add_trace(go.Scatter(x=[stock_data.index[0], stock_data.index[-1]], y=[recent_high, recent_high], 
-                                        mode='lines', line=dict(dash='dash', color='red'), name='阻力位'))
-                fig.add_trace(go.Scatter(x=[stock_data.index[0], stock_data.index[-1]], y=[recent_low, recent_low], 
-                                        mode='lines', line=dict(dash='dash', color='green'), name='支撐位'))
-                fig.add_trace(go.Scatter(x=[stock_data.index[-1]], y=[stock_data['Close'][-1]], mode='markers', 
-                                        marker=dict(size=12, color='blue', symbol='star'), name='買入信號'))
-                fig.add_trace(go.Bar(x=stock_data.index, y=stock_data['Volume'], name='成交量', yaxis='y2', opacity=0.3))
-                
-                fig.update_layout(
-                    title=f"{ticker} 突破圖表（買入信號）",
-                    xaxis_title="日期",
-                    yaxis_title="價格",
-                    yaxis2=dict(title="成交量", overlaying='y', side='right'),
-                    showlegend=True
+                # 創建子圖
+                fig = make_subplots(
+                    rows=2, cols=1,
+                    shared_xaxes=True,
+                    vertical_spacing=0.03,
+                    subplot_titles=(f"{ticker} 突破圖表（買入信號）", "MACD"),
+                    row_heights=[0.7, 0.3],
+                    specs=[[{"secondary_y": True}], [{}]]
                 )
+                
+                # 添加股價線
+                fig.add_trace(
+                    go.Scatter(
+                        x=stock_data.index,
+                        y=stock_data['Close'],
+                        mode='lines',
+                        name='價格',
+                        line=dict(color='blue'),
+                        hovertemplate="日期: %{x|%Y-%m-%d}<br>價格: %{y:.2f}"
+                    ),
+                    row=1, col=1, secondary_y=False
+                )
+                # 添加阻力位和支撐位
+                fig.add_trace(
+                    go.Scatter(
+                        x=[stock_data.index[0], stock_data.index[-1]],
+                        y=[recent_high, recent_high],
+                        mode='lines',
+                        line=dict(dash='dash', color='red'),
+                        name='阻力位'
+                    ),
+                    row=1, col=1, secondary_y=False
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=[stock_data.index[0], stock_data.index[-1]],
+                        y=[recent_low, recent_low],
+                        mode='lines',
+                        line=dict(dash='dash', color='green'),
+                        name='支撐位'
+                    ),
+                    row=1, col=1, secondary_y=False
+                )
+                # 添加買入信號
+                fig.add_trace(
+                    go.Scatter(
+                        x=[stock_data.index[-1]],
+                        y=[stock_data['Close'][-1]],
+                        mode='markers',
+                        marker=dict(size=12, color='blue', symbol='star'),
+                        name='買入信號',
+                        hovertemplate="日期: %{x|%Y-%m-%d}<br>價格: %{y:.2f}"
+                    ),
+                    row=1, col=1, secondary_y=False
+                )
+                # 添加成交量
+                fig.add_trace(
+                    go.Bar(
+                        x=stock_data.index,
+                        y=stock_data['Volume'],
+                        name='成交量',
+                        opacity=0.3,
+                        marker_color='pink',
+                        hovertemplate="日期: %{x|%Y-%m-%d}<br>成交量: %{y:,.0f}"
+                    ),
+                    row=1, col=1, secondary_y=True
+                )
+                # 添加 MACD 線
+                fig.add_trace(
+                    go.Scatter(
+                        x=stock_data.index,
+                        y=macd_line,
+                        mode='lines',
+                        name='MACD 線',
+                        line=dict(color='blue'),
+                        hovertemplate="日期: %{x|%Y-%m-%d}<br>MACD: %{y:.2f}"
+                    ),
+                    row=2, col=1
+                )
+                # 添加訊號線
+                fig.add_trace(
+                    go.Scatter(
+                        x=stock_data.index,
+                        y=macd_signal,
+                        mode='lines',
+                        name='訊號線',
+                        line=dict(color='orange'),
+                        hovertemplate="日期: %{x|%Y-%m-%d}<br>訊號線: %{y:.2f}"
+                    ),
+                    row=2, col=1
+                )
+                # 添加 MACD 柱狀圖
+                fig.add_trace(
+                    go.Bar(
+                        x=stock_data.index,
+                        y=macd_histogram,
+                        name='MACD 柱狀圖',
+                        marker_color='gray',
+                        opacity=0.5,
+                        hovertemplate="日期: %{x|%Y-%m-%d}<br>MACD 柱狀圖: %{y:.2f}"
+                    ),
+                    row=2, col=1
+                )
+                
+                # 更新佈局
+                fig.update_layout(
+                    height=800,
+                    showlegend=True,
+                    xaxis_title="日期",
+                    margin=dict(b=100)
+                )
+                fig.update_yaxes(title_text="價格", row=1, col=1, secondary_y=False)
+                fig.update_yaxes(title_text="成交量", row=1, col=1, secondary_y=True)
+                fig.update_yaxes(title_text="MACD", row=2, col=1)
+                
+                # 設置 X 軸刻度
+                tickvals = stock_data.index[::5]
+                fig.update_xaxes(
+                    tickvals=tickvals,
+                    ticktext=[d.strftime('%Y-%m-%d') for d in tickvals],
+                    tickangle=45,
+                    tickfont=dict(size=10),
+                    row=1, col=1
+                )
+                fig.update_xaxes(
+                    tickvals=tickvals,
+                    ticktext=[d.strftime('%Y-%m-%d') for d in tickvals],
+                    tickangle=45,
+                    tickfont=dict(size=10),
+                    row=2, col=1
+                )
+                
                 st.plotly_chart(fig)
             else:
                 st.error(f"無法繪製 {ticker} 的圖表：數據獲取失敗")
