@@ -20,7 +20,7 @@ def fetch_stock_data(ticker, days=90):
 
 def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=5, min_adr=5):
     stock = fetch_stock_data(ticker)
-    if stock is None or len(stock) < prior_days + consol_days + 30:  # 確保有足夠數據
+    if stock is None or len(stock) < prior_days + consol_days + 30:
         return None
     
     close = stock['Close']
@@ -29,17 +29,21 @@ def analyze_stock(ticker, prior_days=20, consol_days=10, min_rise=30, max_range=
     
     results = []
     for i in range(-30, 0):
-        if i < -prior_days:  # 確保有足夠的前期數據
+        if i < -prior_days:
             prior_rise = (close.iloc[i] / close.iloc[i - prior_days] - 1) * 100
             recent_high = close.iloc[i - consol_days:i].max()
             recent_low = close.iloc[i - consol_days:i].min()
             consolidation_range = (recent_high / recent_low - 1) * 100
             vol_decline = volume.iloc[i - consol_days:i].mean() < volume.iloc[i - prior_days:i - consol_days].mean()
             
-            # 計算 ADR
-            daily_range = (stock['High'].iloc[i - prior_days:i] - stock['Low'].iloc[i - prior_days:i]) / stock['Close'].shift(1).iloc[i - prior_days:i]
-            adr_mean = daily_range.mean()  # 先計算平均值
-            adr = adr_mean * 100 if not pd.isna(adr_mean) else 0  # 檢查純量是否為 NaN
+            # 分步計算 ADR
+            high = stock['High'].iloc[i - prior_days:i]
+            low = stock['Low'].iloc[i - prior_days:i]
+            prev_close = stock['Close'].shift(1).iloc[i - prior_days:i]
+            daily_range = (high - low) / prev_close  # Series
+            adr = daily_range.mean() * 100  # 純量平均值
+            if pd.isna(adr):  # 處理 NaN
+                adr = 0
             
             breakout = (i == -1) and (close.iloc[-1] > recent_high) and (close.iloc[-2] <= recent_high)
             breakout_volume = (i == -1) and (volume.iloc[-1] > volume.iloc[-10:].mean() * 1.5)
