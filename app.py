@@ -32,13 +32,15 @@ max_range = st.sidebar.slider("最大盤整範圍 (%)", 3, 15, 10, help="增加�
 min_adr = st.sidebar.slider("最小 ADR (%)", 0, 10, 0, help="設為 0 以納入更多股票")
 max_stocks = st.sidebar.slider("最大篩選股票數量", 10, 500, 50, help="限制股票數量以加快處理速度，僅適用於 NASDAQ All")
 
-# 選擇股票池
-if index_option == "NASDAQ 100":
-    tickers = get_nasdaq_100()
-elif index_option == "S&P 500":
-    tickers = get_sp500()
-else:
-    tickers = get_nasdaq_all()[:max_stocks]
+# 選擇股票池（避免自動觸發篩選）
+if 'tickers' not in st.session_state:
+    if index_option == "NASDAQ 100":
+        st.session_state['tickers'] = get_nasdaq_100()
+    elif index_option == "S&P 500":
+        st.session_state['tickers'] = get_sp500()
+    else:
+        st.session_state['tickers'] = get_nasdaq_all()[:max_stocks]
+tickers = st.session_state['tickers']
 
 # 篩選股票
 if st.button("運行篩選"):
@@ -61,9 +63,9 @@ if 'df' in st.session_state:
     df = st.session_state['df']
     st.subheader("篩選結果")
     # 只顯示最近一天的數據
-    latest_df = df[df['Date'] == df['Date'].max()]
+    latest_df = df[df['Date'] == df['Date'].max()].copy()  # 創建副本以避免 SettingWithCopyWarning
     # 添加狀態欄位
-    latest_df['Status'] = latest_df.apply(
+    latest_df.loc[:, 'Status'] = latest_df.apply(
         lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume']
         else "已突破但成交量不足" if row['Breakout']
         else "盤整中" if row['Consolidation_Range_%'] < max_range
@@ -114,7 +116,7 @@ if 'df' in st.session_state:
                 )
                 st.plotly_chart(fig)
             else:
-                st.error(f"無法獲取 {ticker} 的數據或數據不足以繪製圖表（需至少 10 天數據）")
+                st.error(f"無法繪製 {ticker} 的圖表：數據不足或獲取失敗")
     
     # 顯示突破股票的圖表
     breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume']]
@@ -145,7 +147,7 @@ if 'df' in st.session_state:
                 )
                 st.plotly_chart(fig)
             else:
-                st.error(f"無法獲取 {ticker} 的數據")
+                st.error(f"無法繪製 {ticker} 的圖表：數據獲取失敗")
     else:
         st.info("當前無突破股票（無可買入股票）。可能原因：")
         if latest_df['Breakout'].sum() == 0:
