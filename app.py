@@ -5,14 +5,21 @@ from screening import screen_stocks, fetch_stock_data, get_nasdaq_100, get_sp500
 
 st.title("Qullamaggie Breakout Screener")
 
-# 策略說明
+# 簡介與參考
 st.markdown("""
-### 策略說明
-本程式基於 Qullamaggie Breakout 策略篩選股票，核心邏輯如下：
-1. **前段上升**：股票在過去一段時間（前段上升天數）有顯著漲幅（前段漲幅 > 最小漲幅）。
-2. **盤整階段**：隨後進入低波動盤整（盤整範圍 < 最大盤整範圍），成交量通常下降。
-3. **突破條件**：股票價格突破盤整區間高點，且突破當天成交量顯著放大（> 過去 10 天均量的 1.5 倍）。
-4. **買入時機**：突破當天或突破後回踩確認（本程式以突破當天為買入信號）。
+### 簡介
+本程式基於 Qullamaggie Breakout 策略篩選股票，參考方法來自 [Reddit: Trade Like a Professional - Breakout Swing Trading](https://www.reddit.com/r/wallstreetbetsOGs/comments/om7h73/trade_like_a_professional_breakout_swing_trading/)。
+
+#### 程式最終目的：
+1. **偵測 Qullamaggie Breakout 特徵**：檢查最近 30 日內是否有股票符合 Qullamaggie 描述的 Breakout 特徵：
+   - 前段顯著漲幅（前段漲幅 > 最小漲幅）。
+   - 隨後進入低波動盤整（盤整範圍 < 最大盤整範圍），成交量下降。
+   - 價格突破盤整區間高點，且成交量放大（> 過去 10 天均量的 1.5 倍）。
+2. **識別買入時機並標記信號**：如果股票已到達買入時機（突破當天），在圖表上標記買入信號。
+
+#### 篩選結果說明：
+- 篩選結果顯示最近一天的數據，包含股票的當前狀態（例如「已突破且可買入」、「盤整中」）。
+- 如果有超過 5 隻非重複股票符合條件，將按前段漲幅 (%) 排序，顯示前 5 名的 3 個月走勢圖（包含股價、成交量、10 日均線）。
 """)
 
 # 用戶輸入參數
@@ -47,7 +54,7 @@ if st.button("運行篩選"):
             st.write("- **擴大股票池**：選擇 NASDAQ All 並增加最大篩選股票數量")
         else:
             st.session_state['df'] = df
-            st.success(f"找到 {len(df)} 隻符合條件的股票")
+            st.success(f"找到 {len(df)} 隻符合條件的股票（{len(df['Ticker'].unique())} 隻非重複股票）")
 
 # 顯示結果
 if 'df' in st.session_state:
@@ -75,6 +82,40 @@ if 'df' in st.session_state:
     })
     st.dataframe(display_df[['股票代碼', '日期', '價格', '前段漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']])
     
+    # 檢查非重複股票數量並顯示前 5 名走勢圖
+    unique_tickers = latest_df['Ticker'].unique()
+    if len(unique_tickers) > 5:
+        st.subheader("前 5 名股票走勢（按前段漲幅排序）")
+        # 按前段漲幅排序並取前 5 個非重複股票
+        top_5_df = latest_df.groupby('Ticker').agg({'Prior_Rise_%': 'max'}).reset_index()
+        top_5_df = top_5_df.sort_values(by='Prior_Rise_%', ascending=False).head(5)
+        top_5_tickers = top_5_df['Ticker'].tolist()
+        
+        for ticker in top_5_tickers:
+            stock_data = fetch_stock_data(ticker, days=90)  # 獲取近 3 個月數據
+            if stock_data is not None:
+                # 計算 10 日均線
+                stock_data['MA10'] = stock_data['Close'].rolling(window=10).mean()
+                
+                fig = go.Figure()
+                # 股價走勢
+                fig.add_trace(go.Scatter(x=stock_data.index, y=stock_data['Close'], mode='lines', name='股價'))
+                # 10 日均線
+                fig.add_trace(go.Scatter(x=stock_data.index, y=stock_data['MA10'], mode='lines', name='10 日均線', line=dict(color='orange')))
+                # 成交量
+                fig.add_trace(go.Bar(x=stock_data.index, y=stock_data['Volume'], name='成交量', yaxis='y2', opacity=0.3))
+                
+                fig.update_layout(
+                    title=f"{ticker} 近 3 個月走勢",
+                    xaxis_title="日期",
+                    yaxis_title="價格",
+                    yaxis2=dict(title="成交量", overlaying='y', side='right'),
+                    showlegend=True
+                )
+                st.plotly_chart(fig)
+            else:
+                st.error(f"無法獲取 {ticker} 的數據")
+    
     # 顯示突破股票的圖表
     breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume']]
     if not breakout_df.empty:
@@ -86,18 +127,13 @@ if 'df' in st.session_state:
                 recent_low = stock_data['Close'][-consol_days-1:-1].min()
                 
                 fig = go.Figure()
-                # 價格線
                 fig.add_trace(go.Scatter(x=stock_data.index, y=stock_data['Close'], mode='lines', name='價格'))
-                # 阻力位
                 fig.add_trace(go.Scatter(x=[stock_data.index[0], stock_data.index[-1]], y=[recent_high, recent_high], 
                                         mode='lines', line=dict(dash='dash', color='red'), name='阻力位'))
-                # 支撐位
                 fig.add_trace(go.Scatter(x=[stock_data.index[0], stock_data.index[-1]], y=[recent_low, recent_low], 
                                         mode='lines', line=dict(dash='dash', color='green'), name='支撐位'))
-                # 突破點（買入信號）
                 fig.add_trace(go.Scatter(x=[stock_data.index[-1]], y=[stock_data['Close'][-1]], mode='markers', 
                                         marker=dict(size=12, color='blue', symbol='star'), name='買入信號'))
-                # 成交量
                 fig.add_trace(go.Bar(x=stock_data.index, y=stock_data['Volume'], name='成交量', yaxis='y2', opacity=0.3))
                 
                 fig.update_layout(
