@@ -9,7 +9,7 @@ def plot_top_5_stocks(top_5_tickers):
     """繪製前 5 名股票的走勢圖（包含股價、成交量、10 日均線和 MACD）。"""
     for ticker in top_5_tickers:
         st.write(f"正在處理股票 {ticker}...")
-        stock_data = fetch_stock_data(ticker, days=90)
+        stock_data = fetch_stock_data(ticker, trading_days=90)
         
         # 檢查數據是否成功獲取
         if stock_data is None:
