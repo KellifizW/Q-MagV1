@@ -14,14 +14,23 @@ st.markdown("""
 
 #### 程式最終目的：
 1. **偵測 Qullamaggie Breakout 特徵**：檢查最近 30 日內是否有股票符合 Qullamaggie 描述的 Breakout 特徵：
-   - 前段顯著漲幅（前段漲幅 > 最小漲幅）。
+   - 前段顯著漲幅（22 日內漲幅 > 22 日內最小漲幅，67 日內漲幅 > 67 日內最小漲幅）。
    - 隨後進入低波動盤整（盤整範圍 < 最大盤整範圍），成交量下降。
    - 價格突破盤整區間高點，且成交量放大（> 過去 10 天均量的 1.5 倍）。
 2. **識別買入時機並標記信號**：如果股票已到達買入時機（突破當天），在圖表上標記買入信號。
 
 #### 篩選結果說明：
 - 篩選結果顯示最近一天的數據，包含股票的當前狀態（例如「已突破且可買入」、「盤整中」）。
-- 如果有超過 5 隻非重複股票符合條件，將按前段漲幅 (%) 排序，顯示前 5 名的 3 個月走勢圖（包含股價、成交量、10 日均線及 MACD）。
+- 顯示所有符合條件的股票（最多 5 隻），按 22 日內漲幅排序，繪製 3 個月走勢圖（包含股價、成交量、10 日均線及 MACD）。
+
+#### 補充說明：
+- **原作者 Qullamaggie 使用的參數**（根據 Reddit 文章）：
+  - 前段上升天數：20 天
+  - 盤整天數：10 天
+  - 22 日內最小漲幅：10%
+  - 67 日內最小漲幅：40%
+  - 最大盤整範圍：10%
+  - 最小 ADR：2%
 """)
 
 # 用戶輸入參數（使用 st.form）
@@ -29,10 +38,14 @@ with st.sidebar.form(key="screening_form"):
     st.header("篩選參數")
     index_option = st.selectbox("選擇股票池", ["NASDAQ 100", "S&P 500", "NASDAQ All"])
     prior_days = st.slider("前段上升天數", 10, 30, 20)
-    consol_days = st.slider("盤整天數", 5, 15, 10)
-    min_rise = st.slider("最小漲幅 (%)", 0, 50, 0, help="設為 0 以獲得更多結果")
+    consol_days = st.slider(
+        "盤整天數", 5, 15, 10,
+        help="盤整天數是指股票在突破前低波動盤整的天數。計算方式：從最近一天向前回溯指定天數，檢查這段期間的價格波動範圍是否小於最大盤整範圍。"
+    )
+    min_rise_22 = st.slider("22 日內最小漲幅 (%)", 0, 50, 10, help="股票在過去 22 日內的最小漲幅要求")
+    min_rise_67 = st.slider("67 日內最小漲幅 (%)", 0, 100, 40, help="股票在過去 67 日內的最小漲幅要求")
     max_range = st.slider("最大盤整範圍 (%)", 3, 15, 10, help="增加此值以放寬整理區間")
-    min_adr = st.slider("最小 ADR (%)", 0, 10, 0, help="設為 0 以納入更多股票")
+    min_adr = st.slider("最小 ADR (%)", 0, 10, 2, help="設為 0 以納入更多股票")
     max_stocks = st.slider("最大篩選股票數量", 10, 500, 50, help="限制股票數量以加快處理速度，僅適用於 NASDAQ All")
     submit_button = st.form_submit_button("運行篩選")
 
@@ -60,11 +73,12 @@ if submit_button:
     # 篩選邏輯
     with st.spinner("篩選中..."):
         progress_bar = st.progress(0)
-        df = screen_stocks(tickers, prior_days, consol_days, min_rise, max_range, min_adr, progress_bar)
+        df = screen_stocks(tickers, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr, progress_bar)
         progress_bar.progress(100)
         if df.empty:
             st.warning("無符合條件的股票。請嘗試以下調整：")
-            st.write("- **降低最小漲幅** (目前: {}%)：嘗試設為 0-10%".format(min_rise))
+            st.write("- **降低 22 日內最小漲幅** (目前: {}%)：嘗試設為 0-10%".format(min_rise_22))
+            st.write("- **降低 67 日內最小漲幅** (目前: {}%)：嘗試設為 20-40%".format(min_rise_67))
             st.write("- **增加最大盤整範圍** (目前: {}%)：嘗試設為 10-15%".format(max_range))
             st.write("- **降低最小 ADR** (目前: {}%)：嘗試設為 0-2%".format(min_adr))
             st.write("- **擴大股票池**：選擇 NASDAQ All 並增加最大篩選股票數量")
@@ -93,21 +107,22 @@ if 'df' in st.session_state:
         'Ticker': '股票代碼',
         'Date': '日期',
         'Price': '價格',
-        'Prior_Rise_%': '前段漲幅 (%)',
+        'Prior_Rise_22_%': '22 日內漲幅 (%)',
+        'Prior_Rise_67_%': '67 日內漲幅 (%)',
         'Consolidation_Range_%': '盤整範圍 (%)',
         'ADR_%': '平均日波幅 (%)',
         'Breakout': '是否突破',
         'Breakout_Volume': '突破成交量'
     })
-    st.dataframe(display_df[['股票代碼', '日期', '價格', '前段漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']])
+    st.dataframe(display_df[['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']])
     
     # 繪製符合條件的股票走勢圖
     unique_tickers = latest_df['Ticker'].unique()
     if len(unique_tickers) > 0:  # 只要有符合條件的股票就繪製圖表
-        st.subheader("符合條件的股票走勢（按前段漲幅排序）")
-        # 按前段漲幅排序
-        top_df = latest_df.groupby('Ticker').agg({'Prior_Rise_%': 'max'}).reset_index()
-        top_df = top_df.sort_values(by='Prior_Rise_%', ascending=False)
+        st.subheader("符合條件的股票走勢（按 22 日內漲幅排序）")
+        # 按 22 日內漲幅排序
+        top_df = latest_df.groupby('Ticker').agg({'Prior_Rise_22_%': 'max'}).reset_index()
+        top_df = top_df.sort_values(by='Prior_Rise_22_%', ascending=False)
         # 如果股票數量大於 5，則只取前 5 隻；否則取所有股票
         num_to_display = min(len(unique_tickers), 5)
         top_tickers = top_df['Ticker'].head(num_to_display).tolist()
@@ -122,7 +137,7 @@ if 'df' in st.session_state:
     else:
         st.info("當前無突破股票（無可買入股票）。可能原因：")
         if latest_df['Breakout'].sum() == 0:
-            st.write("- 無股票價格突破盤整區間高點。嘗試增加最大盤整範圍或降低最小漲幅。")
+            st.write("- 無股票價格突破盤整區間高點。嘗試增加最大盤整範圍或降低 22 日/67 日內最小漲幅。")
         elif latest_df['Breakout_Volume'].sum() == 0:
             st.write("- 突破股票的成交量不足（需 > 過去 10 天均量的 1.5 倍）。嘗試調整成交量條件。")
 
