@@ -85,19 +85,20 @@ def analyze_stock(args):
     dates = stock.index
     
     results = []
-    messages = []  # 用於收集每一天的篩選訊息
-    has_match = False  # 標記是否至少有一天符合條件
+    messages = []
+    has_match = False
 
     for i in range(-30, 0):
-        # 計算 22 日和 67 日漲幅
-        if i + 22 >= 0 or len(close) < 22:
+        # 計算 22 日漲幅
+        if i - 22 < -len(close):  # 檢查 22 天前的索引是否超出數據範圍
             rise_22 = 0
         else:
             price_22_days_ago = close.iloc[i - 22]
             current_price = close.iloc[i]
             rise_22 = ((current_price - price_22_days_ago) / price_22_days_ago) * 100 if price_22_days_ago != 0 else 0
 
-        if i + 67 >= 0 or len(close) < 67:
+        # 計算 67 日漲幅
+        if i - 67 < -len(close):  # 檢查 67 天前的索引是否超出數據範圍
             rise_67 = 0
         else:
             price_67_days_ago = close.iloc[i - 67]
@@ -145,16 +146,13 @@ def analyze_stock(args):
         else:
             messages.append(f"股票 {ticker} 不符合條件：22 日漲幅 = {rise_22:.2f}% (需 >= {min_rise_22}), 67 日漲幅 = {rise_67:.2f}% (需 >= {min_rise_67}), 盤整範圍 = {consolidation_range:.2f}% (需 <= {max_range}), ADR = {adr:.2f}% (需 >= {min_adr})")
 
-    # 顯示合併訊息：如果有符合條件的天數，顯示最新一天的符合訊息；否則顯示最新一天的不符合訊息
     if messages:
         if has_match:
-            # 顯示最新一天的符合條件訊息
             for msg in reversed(messages):
                 if "符合條件" in msg:
                     st.write(msg)
                     break
         else:
-            # 顯示最新一天的不符合條件訊息
             st.write(messages[-1])
 
     return results, None, None
