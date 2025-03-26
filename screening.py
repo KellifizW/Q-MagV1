@@ -23,18 +23,17 @@ def get_sp500():
         return pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]['Symbol'].tolist()
     except Exception as e:
         st.error(f"無法從 Wikipedia 獲取 S&P 500 清單: {e}")
-        return get_nasdaq_100()  # 後備使用 Nasdaq 100
+        return get_nasdaq_100()
 
 def get_nasdaq_all():
     try:
-        # 使用 Nasdaq 官方 CSV 檔案
         nasdaq = pd.read_csv('https://old.nasdaq.com/screening/companies-by-name.aspx?letter=0&exchange=nasdaq&render=download')
         return nasdaq['Symbol'].tolist()
     except Exception as e:
         st.error(f"無法從 Nasdaq 獲取股票清單: {e}")
-        return get_nasdaq_100()  # 後備使用 Nasdaq 100
+        return get_nasdaq_100()
 
-@st.cache_data(ttl=3600)  # 快取 1 小時
+@st.cache_data(ttl=3600)
 def fetch_stock_data(ticker, days=90):
     end_date = datetime.today()
     start_date = end_date - timedelta(days=days)
@@ -101,5 +100,5 @@ def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise=30, max_range
             if result:
                 results.extend(result)
             if progress_bar:
-                progress_bar.progress(min((i + 1) / total_tickers, 1.0))  # 更新進度條
+                progress_bar.progress(min((i + 1) / total_tickers, 1.0))
     return pd.DataFrame(results)
