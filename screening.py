@@ -1,7 +1,7 @@
+# screening.py
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
-from multiprocessing import Pool
 import streamlit as st
 import time
 
@@ -39,7 +39,7 @@ def fetch_stock_data(ticker, days=90):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            end_date = datetime.today()
+            end_date = datetime(2025, 3, 26)  # 固定日期以符合要求
             start_date = end_date - timedelta(days=days)
             stock = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=False, timeout=15)
             if stock.empty:
@@ -58,8 +58,9 @@ def fetch_stock_data(ticker, days=90):
                 return None
 
 def analyze_stock(args):
-    ticker, prior_days, consol_days, min_rise, max_range, min_adr = args
-    stock = fetch_stock_data(ticker)
+    ticker, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr = args
+    # 確保數據範圍足夠（至少需要 67 天數據來計算 67 日漲幅）
+    stock = fetch_stock_data(ticker, days=max(prior_days + consol_days + 30, 67))
     if stock is None or len(stock) < prior_days + consol_days + 30:
         return None
     
@@ -69,11 +70,27 @@ def analyze_stock(args):
     
     results = []
     for i in range(-30, 0):
+        # 計算 22 日內漲幅
+        if i + 22 >= 0 or len(close) < 22:
+            rise_22 = 0
+        else:
+            price_22_days_ago = close.iloc[i - 22]
+            current_price = close.iloc[i]
+            rise_22 = ((current_price - price_22_days_ago) / price_22_days_ago) * 100 if price_22_days_ago != 0 else 0
+
+        # 計算 67 日內漲幅
+        if i + 67 >= 0 or len(close) < 67:
+            rise_67 = 0
+        else:
+            price_67_days_ago = close.iloc[i - 67]
+            rise_67 = ((current_price - price_67_days_ago) / price_67_days_ago) * 100 if price_67_days_ago != 0 else 0
+
+        # 計算前段漲幅（僅用於檢查 prior_days 期間的趨勢）
         if i < -prior_days:
             prior_rise = (close.iloc[i] / close.iloc[i - prior_days] - 1) * 100
             recent_high = close.iloc[i - consol_days:i].max()
             recent_low = close.iloc[i - consol_days:i].min()
-            consolidation_range = (recent_high / recent_low - 1) * 100
+            consolidation_range = (recent_high / recent_low - 1) * 100 if recent_low != 0 else float('inf')
             vol_decline = volume.iloc[i - consol_days:i].mean() < volume.iloc[i - prior_days:i - consol_days].mean()
             
             high = stock['High'].squeeze().iloc[i - prior_days:i]
@@ -94,12 +111,14 @@ def analyze_stock(args):
             breakout = (i == -1) and (close.iloc[-1] > recent_high) and (close.iloc[-2] <= recent_high)
             breakout_volume = (i == -1) and (volume.iloc[-1] > volume.iloc[-10:].mean() * 1.5)
             
-            if prior_rise > min_rise and consolidation_range < max_range and adr > min_adr:
+            # 使用 22 日和 67 日漲幅進行篩選
+            if rise_22 > min_rise_22 and rise_67 > min_rise_67 and consolidation_range < max_range and adr > min_adr:
                 results.append({
                     'Ticker': ticker,
                     'Date': dates[i].strftime('%Y-%m-%d'),
                     'Price': close.iloc[i],
-                    'Prior_Rise_%': prior_rise,
+                    'Prior_Rise_22_%': rise_22,
+                    'Prior_Rise_67_%': rise_67,
                     'Consolidation_Range_%': consolidation_range,
                     'ADR_%': adr,
                     'Breakout': breakout,
@@ -107,15 +126,22 @@ def analyze_stock(args):
                 })
     return results
 
-def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise=30, max_range=5, min_adr=5, progress_bar=None):
-    with Pool(processes=1) as pool:  # 保持單進程以避免數據庫鎖定
-        total_tickers = len(tickers)
-        results = []
-        for i, result in enumerate(pool.imap_unordered(analyze_stock, 
-                                                       [(ticker, prior_days, consol_days, min_rise, max_range, min_adr) 
-                                                        for ticker in tickers])):
+def screen_stocks(tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5, progress_bar=None):
+    total_tickers = len(tickers)
+    results = []
+    for i, ticker in enumerate(tickers):
+        try:
+            # 調用 analyze_stock 函數
+            result = analyze_stock((ticker, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr))
             if result:
                 results.extend(result)
-            if progress_bar:
-                progress_bar.progress(min((i + 1) / total_tickers, 1.0))
+        except Exception as e:
+            st.warning(f"處理 {ticker} 時發生錯誤：{str(e)}")
+            continue  # 跳過失敗的股票，繼續處理下一隻
+
+        # 更新進度條
+        if progress_bar:
+            progress_bar.progress(min((i + 1) / total_tickers, 1.0))
+        time.sleep(0.05)  # 添加 50 毫秒延遲，避免過多請求
+
     return pd.DataFrame(results)
