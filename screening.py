@@ -6,11 +6,24 @@ import streamlit as st
 
 def get_nasdaq_100():
     try:
-        # 修正表格索引為 0，正確獲取 Nasdaq 100 清單
-        return pd.read_html('https://en.wikipedia.org/wiki/Nasdaq-100')[0]['Ticker'].tolist()
+        # 從 Wikipedia 獲取 Nasdaq-100 清單
+        tables = pd.read_html('https://en.wikipedia.org/wiki/Nasdaq-100')
+        # 假設清單在第一個表格 (索引 0)
+        df = tables[0]
+        # 檢查 'Ticker' 列是否存在
+        if 'Ticker' not in df.columns:
+            st.error(f"表格中未找到 'Ticker' 列，可用列名: {df.columns.tolist()}")
+            raise KeyError("未找到 'Ticker' 列")
+        tickers = df['Ticker'].tolist()
+        st.write(f"成功從 Wikipedia 獲取 Nasdaq-100 清單，包含 {len(tickers)} 隻股票")
+        return tickers
     except Exception as e:
-        st.error(f"無法從 Wikipedia 獲取 Nasdaq 100 清單: {e}")
-        return ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA', 'TSLA', 'META', 'ADBE', 'PYPL', 'INTC']
+        st.error(f"無法從 Wikipedia 獲取 Nasdaq-100 清單: {str(e)}")
+        # 返回後備清單（更完整的 Nasdaq-100 示例）
+        backup = ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA', 'TSLA', 'META', 'ADBE', 'PYPL', 'INTC',
+                  'NFLX', 'CSCO', 'PEP', 'AVGO', 'COST', 'TMUS', 'AMD', 'TXN', 'QCOM', 'AMGN']
+        st.write(f"使用後備清單，包含 {len(backup)} 隻股票")
+        return backup
 
 def get_sp500():
     try:
