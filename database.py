@@ -19,7 +19,7 @@ def clone_repo():
     """從 GitHub 複製存儲庫到本地"""
     if os.path.exists(REPO_DIR):
         shutil.rmtree(REPO_DIR)
-    repo = git.Repo.clone_from(f"https://{TOKEN}@github.com/YOUR_USERNAME/stock-screening.git", REPO_DIR)
+    repo = git.Repo.clone_from(f"https://{TOKEN}@github.com/KellifizW/Q-MagV1.git", REPO_DIR)
     return repo
 
 def push_to_github(repo, message="Update stocks.db"):
