@@ -33,11 +33,11 @@ def init_repo():
         # 調試：檢查 st.secrets 是否包含 github_token
         st.write("調試：檢查 st.secrets 內容")
         st.write(f"st.secrets 可用鍵：{list(st.secrets.keys())}")
-        if "github_token" not in st.secrets:
+        if "TOKEN" not in st.secrets:
             logger.error("st.secrets 中未找到 github_token")
             st.error("未找到 'github_token'，請在 Streamlit Cloud 的 Secrets 中配置為：github_token = \"your_token\"")
             return None
-        token = st.secrets["github_token"]
+        token = st.secrets["TOKEN"]
         st.write("成功從 st.secrets 獲取 github_token")
 
         # 配置遠端倉庫
