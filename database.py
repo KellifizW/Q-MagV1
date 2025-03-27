@@ -19,6 +19,12 @@ def clone_repo():
         if os.path.exists(REPO_DIR):
             shutil.rmtree(REPO_DIR)
         repo = git.Repo.clone_from(REPO_URL, REPO_DIR)
+        # 配置憑證助手
+        with repo.config_writer() as git_config:
+            git_config.set_value('credential', 'helper', 'store --file=/tmp/git-credentials')
+        with open('/tmp/git-credentials', 'w') as f:
+            f.write(f"https://{st.secrets['TOKEN']}:@github.com")
+        print("倉庫克隆成功並配置憑證")
         return repo
     except KeyError:
         st.error("未找到 TOKEN 秘密，請在 Streamlit Cloud 的 Secrets 中配置")
@@ -29,15 +35,21 @@ def clone_repo():
 
 def push_to_github(repo, message="Update stocks.db"):
     try:
-        # 配置 Git 身份
         repo.git.config('user.name', 'KellifizW')
         repo.git.config('user.email', 'kellyindabox@gmail.com')
         repo.git.add("stocks.db")
-        repo.git.commit(m=message)
-        repo.git.push()
-        st.write(f"已推送至 GitHub: {message}")
-    except Exception as e:
+        if repo.is_dirty():
+            repo.git.commit(m=message)
+            repo.git.push()
+            st.write(f"已推送至 GitHub: {message}")
+        else:
+            st.write("沒有變更需要推送")
+    except git.GitCommandError as e:
         st.error(f"推送至 GitHub 失敗: {e}")
+        st.error(f"命令: {e.command}")
+        st.error(f"錯誤輸出: {e.stderr}")
+    except Exception as e:
+        st.error(f"推送至 GitHub 發生未知錯誤: {e}")
 
 def download_with_retry(tickers, start, end, retries=3, delay=5):
     for attempt in range(retries):
@@ -81,7 +93,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
     start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
     
     batch_count = 0
-    total_batches = (len(tickers) + batch_size - 1) // batch_size  # 計算總批次數
+    total_batches = (len(tickers) + batch_size - 1) // batch_size
     
     for i in range(0, len(tickers), batch_size):
         batch_tickers = tickers[i:i + batch_size]
@@ -104,16 +116,15 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
             
             data.to_sql('stocks', conn, if_exists='append', index=False)
         
-        # 每 10 個批次推送一次
         if batch_count % 10 == 0 or batch_count == total_batches:
-            conn.commit()  # 提交當前數據到資料庫
+            conn.commit()
             push_to_github(repo, f"Initialized {batch_count} batches of stock data")
         
         time.sleep(2)
     
     pd.DataFrame({'last_updated': [end_date.strftime('%Y-%m-%d')]}).to_sql('metadata', conn, if_exists='replace', index=False)
     conn.commit()
-    if batch_count % 10 != 0:  # 如果最後一批未推送，補推送一次
+    if batch_count % 10 != 0:
         push_to_github(repo, "Final initialization of stocks.db")
     conn.close()
 
@@ -158,7 +169,6 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
             
             data.to_sql('stocks', conn, if_exists='append', index=False)
         
-        # 每 10 個批次推送一次
         if batch_count % 10 == 0 or batch_count == total_batches:
             conn.commit()
             push_to_github(repo, f"Updated {batch_count} batches of stock data")
@@ -167,7 +177,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
     
     pd.DataFrame({'last_updated': [current_date.strftime('%Y-%m-%d')]}).to_sql('metadata', conn, if_exists='replace', index=False)
     conn.commit()
-    if batch_count % 10 != 0:  # 如果最後一批未推送，補推送一次
+    if batch_count % 10 != 0:
         push_to_github(repo, "Final update of stocks.db")
     conn.close()
     return True
@@ -213,7 +223,6 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=50, repo=None):
             
             data.to_sql('stocks', conn, if_exists='append', index=False)
         
-        # 每 10 個批次推送一次
         if batch_count % 10 == 0 or batch_count == total_batches:
             conn.commit()
             push_to_github(repo, f"Extended S&P 500 with {batch_count} batches")
@@ -221,7 +230,7 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=50, repo=None):
         time.sleep(2)
     
     conn.commit()
-    if batch_count % 10 != 0:  # 如果最後一批未推送，補推送一次
+    if batch_count % 10 != 0:
         push_to_github(repo, "Final S&P 500 extension")
     conn.close()
     return True
