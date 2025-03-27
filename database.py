@@ -10,24 +10,23 @@ import streamlit as st
 import time
 
 # 配置路徑和參數
-REPO_DIR = "."  # Streamlit Cloud 中，倉庫克隆到應用根目錄
+REPO_DIR = "."  # Streamlit Cloud 中，檔案位於應用根目錄
 DB_PATH = os.path.join(REPO_DIR, "stocks.db")  # 即 ./stocks.db
 REPO_URL = f"https://{st.secrets['TOKEN']}@github.com/KellifizW/Q-MagV1.git"
 nasdaq = mcal.get_calendar('NASDAQ')
 
 def clone_repo():
     try:
+        # 確保每次啟動時從 GitHub 獲取最新檔案
         if os.path.exists(REPO_DIR):
-            # 清空當前目錄下的舊倉庫檔案，但保留 Streamlit 的必要檔案（如 app.py）
             for item in os.listdir(REPO_DIR):
-                if item not in ['app.py', 'requirements.txt', '.streamlit', 'stocks.db', 'tickers.csv']:
+                if item not in ['app.py', 'requirements.txt', '.streamlit', 'database.py', 'screening.py']:
                     path = os.path.join(REPO_DIR, item)
                     if os.path.isdir(path):
                         shutil.rmtree(path)
                     else:
                         os.remove(path)
         repo = git.Repo.clone_from(REPO_URL, REPO_DIR)
-        # 配置憑證助手
         with repo.config_writer() as git_config:
             git_config.set_value('credential', 'helper', 'store --file=.git-credentials')
         with open('.git-credentials', 'w') as f:
@@ -45,7 +44,9 @@ def push_to_github(repo, message="Update stocks.db"):
     try:
         repo.git.config('user.name', 'KellifizW')
         repo.git.config('user.email', 'kellyindabox@gmail.com')
+        # 添加所有可能變更的檔案
         repo.git.add("stocks.db")
+        repo.git.add("tickers.csv")  # 如果 tickers.csv 可能被修改，也推送
         if repo.is_dirty():
             repo.git.commit(m=message)
             repo.git.push()
@@ -114,14 +115,9 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
             else:
                 data = data.stack(level=1, future_stack=True).reset_index().rename(columns={'level_1': 'Ticker'})
             
-            st.write(f"批次 {batch_count} 的數據欄位: {list(data.columns)}")
-            expected_columns = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
-            data = data.rename(columns={'Adj Close': 'Adj_Close'})
-            if 'Price' in data.columns:
-                st.warning("發現意外的 'Price' 欄位，將其映射為 'Close'")
-                data = data.rename(columns={'Price': 'Close'})
+            data.columns = [col.replace('Adj Close', 'Adj_Close') for col in data.columns]
+            expected_columns = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Adj_Close', 'Volume']
             data = data[[col for col in expected_columns if col in data.columns]]
-            
             data.to_sql('stocks', conn, if_exists='append', index=False)
         
         if batch_count % 10 == 0 or batch_count == total_batches:
@@ -171,14 +167,9 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
             else:
                 data = data.stack(level=1, future_stack=True).reset_index().rename(columns={'level_1': 'Ticker'})
             
-            st.write(f"批次 {batch_count} 的數據欄位: {list(data.columns)}")
-            expected_columns = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
-            data = data.rename(columns={'Adj Close': 'Adj_Close'})
-            if 'Price' in data.columns:
-                st.warning("發現意外的 'Price' 欄位，將其映射為 'Close'")
-                data = data.rename(columns={'Price': 'Close'})
+            data.columns = [col.replace('Adj Close', 'Adj_Close') for col in data.columns]
+            expected_columns = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Adj_Close', 'Volume']
             data = data[[col for col in expected_columns if col in data.columns]]
-            
             data.to_sql('stocks', conn, if_exists='append', index=False)
         
         if batch_count % 10 == 0 or batch_count == total_batches:
@@ -193,6 +184,27 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
         push_to_github(repo, "Final update of stocks.db")
     conn.close()
     return True
+
+def fetch_stock_data(tickers, stock_pool=None, db_path=DB_PATH, trading_days=70):
+    conn = sqlite3.connect(db_path)
+    if stock_pool == "S&P 500":
+        from screening import get_sp500
+        tickers_sp500 = get_sp500()
+        repo = clone_repo()
+        if repo and extend_sp500(tickers_sp500, repo=repo):
+            st.write("S&P 500 股票補充完成，更新資料庫...")
+    
+    end_date = datetime.now().date()
+    start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[-trading_days].date()
+    
+    query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?']*len(tickers))}) AND Date >= ?"
+    data = pd.read_sql_query(query, conn, params=tickers + [start_date.strftime('%Y-%m-%d')], index_col='Date', parse_dates=True)
+    conn.close()
+    
+    if data.empty and stock_pool != "S&P 500":
+        st.error("資料庫中無符合條件的數據，請檢查初始化是否成功")
+        return None
+    return data.pivot(columns='Ticker')
 
 def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=50, repo=None):
     if repo is None:
@@ -225,14 +237,9 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=50, repo=None):
             else:
                 data = data.stack(level=1, future_stack=True).reset_index().rename(columns={'level_1': 'Ticker'})
             
-            st.write(f"批次 {batch_count} 的數據欄位: {list(data.columns)}")
-            expected_columns = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
-            data = data.rename(columns={'Adj Close': 'Adj_Close'})
-            if 'Price' in data.columns:
-                st.warning("發現意外的 'Price' 欄位，將其映射為 'Close'")
-                data = data.rename(columns={'Price': 'Close'})
+            data.columns = [col.replace('Adj Close', 'Adj_Close') for col in data.columns]
+            expected_columns = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Adj_Close', 'Volume']
             data = data[[col for col in expected_columns if col in data.columns]]
-            
             data.to_sql('stocks', conn, if_exists='append', index=False)
         
         if batch_count % 10 == 0 or batch_count == total_batches:
@@ -246,40 +253,3 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=50, repo=None):
         push_to_github(repo, "Final S&P 500 extension")
     conn.close()
     return True
-
-def fetch_stock_data(tickers, stock_pool=None, db_path=DB_PATH, trading_days=70):
-    conn = sqlite3.connect(db_path)
-    if stock_pool == "S&P 500":
-        from screening import get_sp500
-        tickers_sp500 = get_sp500()
-        repo = clone_repo()
-        if repo and extend_sp500(tickers_sp500, repo=repo):
-            st.write("S&P 500 股票補充完成，更新資料庫...")
-    
-    end_date = datetime.now().date()
-    start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[-trading_days].date()
-    
-    query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?']*len(tickers))}) AND Date >= ?"
-    data = pd.read_sql_query(query, conn, params=tickers + [start_date.strftime('%Y-%m-%d')], index_col='Date', parse_dates=True)
-    conn.close()
-    
-    if data.empty and stock_pool != "S&P 500":
-        st.error("資料庫中無符合條件的數據，請檢查初始化是否成功")
-        return None
-    return data.pivot(columns='Ticker')
-
-# 示例 app.py 使用方式
-if __name__ == "__main__":
-    csv_tickers = ["AAPL", "MSFT", "GOOGL"] * 50  # 示例：150 個股票
-    if 'initialized' not in st.session_state:
-        st.session_state['initialized'] = False
-
-    repo = clone_repo()
-    if repo:
-        if not os.path.exists(DB_PATH) and not st.session_state['initialized']:
-            st.write("初始化資料庫...")
-            initialize_database(csv_tickers, repo=repo)
-            st.session_state['initialized'] = True
-        else:
-            st.write("更新資料庫...")
-            update_database(csv_tickers, repo=repo)
