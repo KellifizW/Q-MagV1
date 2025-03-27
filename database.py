@@ -50,7 +50,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
-    # 檢查並創建 stocks 表（如果不存在）
+    # 定義表結構
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS stocks (
             Date TEXT,
@@ -78,9 +78,20 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50):
                 data = pd.DataFrame(data).assign(Ticker=batch_tickers[0])
             else:
                 data = data.stack(level=1, future_stack=True).reset_index().rename(columns={'level_1': 'Ticker'})
-            # 將 Date 設為索引，並確保與表結構一致
-            data = data.rename(columns={'Date': 'Date'})  # 確保列名一致
-            data.to_sql('stocks', conn, if_exists='append', index=False)  # 不將索引作為額外列
+            
+            # 打印數據欄位以調試
+            st.write(f"批次 {i//batch_size + 1} 的數據欄位: {list(data.columns)}")
+            
+            # 確保數據欄位與表結構匹配
+            expected_columns = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+            data = data.rename(columns={'Adj Close': 'Adj_Close'})  # 修正可能的欄位名稱
+            if 'Price' in data.columns:
+                st.warning("發現意外的 'Price' 欄位，將其映射為 'Close'")
+                data = data.rename(columns={'Price': 'Close'})
+            data = data[[col for col in expected_columns if col in data.columns]]  # 只保留匹配的欄位
+            
+            # 插入數據庫
+            data.to_sql('stocks', conn, if_exists='append', index=False)
         time.sleep(2)
     
     pd.DataFrame({'last_updated': [end_date.strftime('%Y-%m-%d')]}).to_sql('metadata', conn, if_exists='replace', index=False)
@@ -108,6 +119,15 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50):
                 data = pd.DataFrame(data).assign(Ticker=batch_tickers[0])
             else:
                 data = data.stack(level=1, future_stack=True).reset_index().rename(columns={'level_1': 'Ticker'})
+            
+            st.write(f"批次 {i//batch_size + 1} 的數據欄位: {list(data.columns)}")
+            expected_columns = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+            data = data.rename(columns={'Adj Close': 'Adj_Close'})
+            if 'Price' in data.columns:
+                st.warning("發現意外的 'Price' 欄位，將其映射為 'Close'")
+                data = data.rename(columns={'Price': 'Close'})
+            data = data[[col for col in expected_columns if col in data.columns]]
+            
             data.to_sql('stocks', conn, if_exists='append', index=False)
         time.sleep(2)
     
@@ -134,6 +154,15 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=50):
                     data = pd.DataFrame(data).assign(Ticker=batch_tickers[0])
                 else:
                     data = data.stack(level=1, future_stack=True).reset_index().rename(columns={'level_1': 'Ticker'})
+                
+                st.write(f"批次 {i//batch_size + 1} 的數據欄位: {list(data.columns)}")
+                expected_columns = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+                data = data.rename(columns={'Adj Close': 'Adj_Close'})
+                if 'Price' in data.columns:
+                    st.warning("發現意外的 'Price' 欄位，將其映射為 'Close'")
+                    data = data.rename(columns={'Price': 'Close'})
+                data = data[[col for col in expected_columns if col in data.columns]]
+                
                 data.to_sql('stocks', conn, if_exists='append', index=False)
             time.sleep(2)
     
