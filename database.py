@@ -11,7 +11,7 @@ import time
 
 REPO_DIR = "repo"
 DB_PATH = os.path.join(REPO_DIR, "stocks.db")
-REPO_URL = f"https://{st.secrets['TOKEN']}@github.com/YOUR_USERNAME/stock-screening.git"  # 替換 YOUR_USERNAME
+REPO_URL = f"https://{st.secrets['TOKEN']}@github.com/KellifizW/Q-MagV1.git"  # 替換 YOUR_USERNAME
 nasdaq = mcal.get_calendar('NASDAQ')
 
 def clone_repo():
