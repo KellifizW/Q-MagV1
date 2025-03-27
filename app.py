@@ -76,8 +76,10 @@ except FileNotFoundError:
 # 資料庫初始化與更新邏輯
 if not os.path.exists(DB_PATH):
     st.write("初始化資料庫...")
-    initialize_database(csv_tickers, repo=repo)
-    push_to_github(repo, "Initial stocks.db creation")
+    if initialize_database(csv_tickers, repo=repo):
+        push_to_github(repo, "Initial stocks.db creation")
+    else:
+        st.error("初始化資料庫失敗，無法繼續操作")
 else:
     st.write("更新資料庫...")
     if update_database(csv_tickers, repo=repo):
@@ -105,9 +107,15 @@ def check_stock_pool(tickers_to_check):
 def force_redownload(tickers, repo):
     """強制重新下載所有 tickers.csv 中的股票數據"""
     with st.spinner("正在強制重新下載所有股票數據..."):
-        initialize_database(tickers, repo=repo)
-        push_to_github(repo, f"Forced re-download: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    st.success("已完成強制重新下載並更新 stocks.db！")
+        success = initialize_database(tickers, repo=repo)
+        if success:
+            push_success = push_to_github(repo, f"Forced re-download: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            if push_success:
+                st.success("已完成強制重新下載並更新 stocks.db！")
+            else:
+                st.error("資料庫重新下載成功，但推送至 GitHub 失敗，請檢查 GitHub 配置")
+        else:
+            st.error("強制重新下載失敗，請檢查日誌或網絡連接")
 
 # 用戶輸入參數
 with st.sidebar.form(key="screening_form"):
