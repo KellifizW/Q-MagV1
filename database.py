@@ -33,7 +33,6 @@ def push_to_github(repo, message="Update stocks.db"):
     repo.git.push()
 
 def download_with_retry(tickers, start, end, retries=3, delay=5):
-    """帶重試機制的批量下載函數"""
     for attempt in range(retries):
         try:
             data = yf.download(tickers, start=start, end=end, group_by="ticker", progress=False, threads=True)
@@ -43,12 +42,30 @@ def download_with_retry(tickers, start, end, retries=3, delay=5):
                 st.write(f"批次數據為空，重試 {attempt + 1}/{retries}")
         except Exception as e:
             st.write(f"下載失敗: {e}，重試 {attempt + 1}/{retries}")
-            time.sleep(delay * (attempt + 1))  # 指數增長延遲
+            time.sleep(delay * (attempt + 1))
     st.error(f"下載 {tickers} 失敗，已達最大重試次數")
-    return pd.DataFrame()  # 返回空 DataFrame 表示失敗
+    return pd.DataFrame()
 
 def initialize_database(tickers, db_path=DB_PATH, batch_size=50):
     conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # 檢查並創建 stocks 表（如果不存在）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS stocks (
+            Date TEXT,
+            Ticker TEXT,
+            Open REAL,
+            High REAL,
+            Low REAL,
+            Close REAL,
+            Adj_Close REAL,
+            Volume INTEGER,
+            PRIMARY KEY (Date, Ticker)
+        )
+    """)
+    conn.commit()
+
     end_date = datetime.now().date()
     start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
     
@@ -57,12 +74,14 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50):
         st.write(f"初始化：下載批次 {i//batch_size + 1}/{len(tickers)//batch_size + 1} ({len(batch_tickers)} 檔股票)...")
         data = download_with_retry(batch_tickers, start=start_date, end=end_date)
         if not data.empty:
-            if len(batch_tickers) == 1:  # 單一股票
+            if len(batch_tickers) == 1:
                 data = pd.DataFrame(data).assign(Ticker=batch_tickers[0])
-            else:  # 多股票
+            else:
                 data = data.stack(level=1, future_stack=True).reset_index().rename(columns={'level_1': 'Ticker'})
-            data.to_sql('stocks', conn, if_exists='append', index=True, index_label='Date')
-        time.sleep(2)  # 增加延遲以避免速率限制
+            # 將 Date 設為索引，並確保與表結構一致
+            data = data.rename(columns={'Date': 'Date'})  # 確保列名一致
+            data.to_sql('stocks', conn, if_exists='append', index=False)  # 不將索引作為額外列
+        time.sleep(2)
     
     pd.DataFrame({'last_updated': [end_date.strftime('%Y-%m-%d')]}).to_sql('metadata', conn, if_exists='replace', index=False)
     conn.close()
@@ -89,8 +108,8 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50):
                 data = pd.DataFrame(data).assign(Ticker=batch_tickers[0])
             else:
                 data = data.stack(level=1, future_stack=True).reset_index().rename(columns={'level_1': 'Ticker'})
-            data.to_sql('stocks', conn, if_exists='append', index=True, index_label='Date')
-        time.sleep(2)  # 增加延遲
+            data.to_sql('stocks', conn, if_exists='append', index=False)
+        time.sleep(2)
     
     pd.DataFrame({'last_updated': [current_date.strftime('%Y-%m-%d')]}).to_sql('metadata', conn, if_exists='replace', index=False)
     conn.close()
@@ -115,8 +134,8 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=50):
                     data = pd.DataFrame(data).assign(Ticker=batch_tickers[0])
                 else:
                     data = data.stack(level=1, future_stack=True).reset_index().rename(columns={'level_1': 'Ticker'})
-                data.to_sql('stocks', conn, if_exists='append', index=True, index_label='Date')
-            time.sleep(2)  # 增加延遲
+                data.to_sql('stocks', conn, if_exists='append', index=False)
+            time.sleep(2)
     
     conn.close()
     return len(missing_tickers) > 0
