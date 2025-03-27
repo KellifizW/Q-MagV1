@@ -28,9 +28,21 @@ def clone_repo():
         return None
 
 def push_to_github(repo, message="Update stocks.db"):
-    repo.git.add("stocks.db")
-    repo.git.commit(m=message)
-    repo.git.push()
+    # 配置 Git 身份（如果未設置）
+    try:
+        repo.git.config('user.name', 'KellifizW')  # 設置提交者名稱
+        repo.git.config('user.email', 'kellyindabox@gmail.com')  # 設置提交者郵箱
+    except Exception as e:
+        st.error(f"配置 Git 身份失敗: {e}")
+        return
+
+    # 添加並提交變更
+    try:
+        repo.git.add("stocks.db")
+        repo.git.commit(m=message)
+        repo.git.push()
+    except Exception as e:
+        st.error(f"推送至 GitHub 失敗: {e}")
 
 def download_with_retry(tickers, start, end, retries=3, delay=5):
     for attempt in range(retries):
