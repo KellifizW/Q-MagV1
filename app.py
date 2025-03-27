@@ -9,6 +9,7 @@ from datetime import datetime
 
 DB_PATH = "./stocks.db"
 
+# 檢查 stocks.db 是否存在並顯示基本信息
 if os.path.exists(DB_PATH):
     st.write(f"找到 stocks.db，檔案大小：{os.path.getsize(DB_PATH)} bytes")
     conn = sqlite3.connect(DB_PATH)
@@ -64,6 +65,7 @@ if repo is None:
     st.error("無法初始化 GitHub 倉庫，請檢查 TOKEN 配置或倉庫設置")
     st.stop()
 
+# 讀取 tickers.csv
 try:
     tickers_df = pd.read_csv("tickers.csv")  # 直接讀取根目錄下的 tickers.csv
     csv_tickers = tickers_df['Ticker'].tolist()
@@ -71,6 +73,7 @@ except FileNotFoundError:
     st.error("找不到 tickers.csv，請確保該檔案已上傳至 GitHub 倉庫根目錄")
     st.stop()
 
+# 資料庫初始化與更新邏輯
 if not os.path.exists(DB_PATH):
     st.write("初始化資料庫...")
     initialize_database(csv_tickers, repo=repo)
@@ -79,6 +82,32 @@ else:
     st.write("更新資料庫...")
     if update_database(csv_tickers, repo=repo):
         push_to_github(repo, f"Daily update: {datetime.now().strftime('%Y-%m-%d')}")
+
+# 新增功能 1：檢查股票池
+def check_stock_pool(tickers_to_check):
+    """檢查 stocks.db 是否包含指定股票池的數據"""
+    conn = sqlite3.connect(DB_PATH)
+    existing_tickers = pd.read_sql_query("SELECT DISTINCT Ticker FROM stocks", conn)['Ticker'].tolist()
+    conn.close()
+    
+    missing_tickers = [ticker for ticker in tickers_to_check if ticker not in existing_tickers]
+    present_tickers = [ticker for ticker in tickers_to_check if ticker in existing_tickers]
+    
+    st.write(f"股票池總數：{len(tickers_to_check)} 隻股票")
+    st.write(f"已在 stocks.db 中的股票數：{len(present_tickers)} 隻")
+    st.write(f"缺失的股票數：{len(missing_tickers)} 隻")
+    if missing_tickers:
+        st.write(f"缺失的股票（前 10 個）：{missing_tickers[:10]}")
+    else:
+        st.success("所有股票數據均存在於 stocks.db 中！")
+
+# 新增功能 2：強制重新下載
+def force_redownload(tickers, repo):
+    """強制重新下載所有 tickers.csv 中的股票數據"""
+    with st.spinner("正在強制重新下載所有股票數據..."):
+        initialize_database(tickers, repo=repo)
+        push_to_github(repo, f"Forced re-download: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.success("已完成強制重新下載並更新 stocks.db！")
 
 # 用戶輸入參數
 with st.sidebar.form(key="screening_form"):
@@ -95,6 +124,20 @@ with st.sidebar.form(key="screening_form"):
     min_adr = st.slider("最小 ADR (%)", 0, 10, 2, help="設為 0 以納入更多股票")
     max_stocks = st.slider("最大篩選股票數量", 10, 500, 50, help="限制股票數量以加快處理速度，僅適用於 NASDAQ All")
     submit_button = st.form_submit_button("運行篩選")
+
+# 新增按鈕：檢查股票池和強制重新下載
+st.sidebar.subheader("資料庫管理")
+if st.sidebar.button("檢查股票池"):
+    if index_option == "NASDAQ 100":
+        tickers_to_check = get_nasdaq_100(csv_tickers)
+    elif index_option == "S&P 500":
+        tickers_to_check = get_sp500()
+    else:
+        tickers_to_check = get_nasdaq_all(csv_tickers)[:max_stocks]
+    check_stock_pool(tickers_to_check)
+
+if st.sidebar.button("強制重新下載"):
+    force_redownload(csv_tickers, repo)
 
 # 重置按鈕
 if st.sidebar.button("重置篩選"):
