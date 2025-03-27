@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from screening import screen_stocks, get_nasdaq_100, get_sp500, get_nasdaq_all
 from visualize import plot_top_5_stocks, plot_breakout_stocks
-from database import clone_repo, push_to_github, initialize_database, update_database
+from database import init_repo, push_to_github, initialize_database, update_database
 import os
 from datetime import datetime
 
@@ -38,10 +38,10 @@ st.markdown("""
   - 最小 ADR：2%
 """)
 
-# 初始化資料庫和 GitHub
-repo = clone_repo()
+# 初始化現有的 Git 倉庫
+repo = init_repo()
 if repo is None:
-    st.error("無法克隆 GitHub 倉庫，請檢查 TOKEN 配置或網路連線")
+    st.error("無法初始化 GitHub 倉庫，請檢查 TOKEN 配置或倉庫設置")
     st.stop()
 
 try:
@@ -53,11 +53,11 @@ except FileNotFoundError:
 
 if not os.path.exists(DB_PATH):
     st.write("初始化資料庫...")
-    initialize_database(csv_tickers, repo=repo)  # 傳遞 repo 參數
+    initialize_database(csv_tickers, repo=repo)
     push_to_github(repo, "Initial stocks.db creation")
 else:
     st.write("更新資料庫...")
-    if update_database(csv_tickers, repo=repo):  # 傳遞 repo 參數
+    if update_database(csv_tickers, repo=repo):
         push_to_github(repo, f"Daily update: {datetime.now().strftime('%Y-%m-%d')}")
 
 # 用戶輸入參數
