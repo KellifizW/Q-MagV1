@@ -1,11 +1,16 @@
-# app.py
 import streamlit as st
 import pandas as pd
-from screening import screen_stocks, fetch_stock_data, get_nasdaq_100, get_sp500, get_nasdaq_all
-from datetime import datetime, timedelta
+from screening import screen_stocks, get_nasdaq_100, get_sp500, get_nasdaq_all
 from visualize import plot_top_5_stocks, plot_breakout_stocks
+from database import clone_repo, push_to_github, initialize_database, update_database
+import os
+from datetime import datetime
 
 st.title("Qullamaggie Breakout Screener")
+
+# 配置
+REPO_DIR = "repo"
+DB_PATH = os.path.join(REPO_DIR, "stocks.db")
 
 # 簡介與參考
 st.markdown("""
@@ -33,7 +38,21 @@ st.markdown("""
   - 最小 ADR：2%
 """)
 
-# 用戶輸入參數（使用 st.form）
+# 初始化資料庫和 GitHub
+repo = clone_repo()
+tickers_df = pd.read_csv(os.path.join(REPO_DIR, "tickers.csv"))
+csv_tickers = tickers_df['Ticker'].tolist()
+
+if not os.path.exists(DB_PATH):
+    st.write("初始化資料庫...")
+    initialize_database(csv_tickers)
+    push_to_github(repo, "Initial stocks.db creation")
+else:
+    st.write("更新資料庫...")
+    if update_database(csv_tickers):
+        push_to_github(repo, f"Daily update: {datetime.now().strftime('%Y-%m-%d')}")
+
+# 用戶輸入參數
 with st.sidebar.form(key="screening_form"):
     st.header("篩選參數")
     index_option = st.selectbox("選擇股票池", ["NASDAQ 100", "S&P 500", "NASDAQ All"])
@@ -55,25 +74,22 @@ if st.sidebar.button("重置篩選"):
         del st.session_state[key]
     st.rerun()
 
-# 處理股票池選擇和篩選
+# 篩選邏輯
 if submit_button:
-    # 重置篩選結果
     if 'df' in st.session_state:
         del st.session_state['df']
     
-    # 更新 tickers
     if index_option == "NASDAQ 100":
-        tickers = get_nasdaq_100()
+        tickers = get_nasdaq_100(csv_tickers)
     elif index_option == "S&P 500":
         tickers = get_sp500()
     else:
-        tickers = get_nasdaq_all()[:max_stocks]
+        tickers = get_nasdaq_all(csv_tickers)[:max_stocks]
     st.session_state['tickers'] = tickers
     
-    # 篩選邏輯
     with st.spinner("篩選中..."):
         progress_bar = st.progress(0)
-        df = screen_stocks(tickers, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr, progress_bar)
+        df = screen_stocks(tickers, index_option, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr, progress_bar)
         progress_bar.progress(100)
         if 'stock_data' in st.session_state:
             st.write(f"批量數據已載入，涵蓋 {len(st.session_state['stock_data'].columns.get_level_values(1))} 檔股票")
@@ -92,22 +108,17 @@ if submit_button:
 if 'df' in st.session_state:
     df = st.session_state['df']
     st.subheader("篩選結果")
-    # 確保 Date 欄位格式一致
     df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-    # 只顯示最近一天的數據
     latest_date = df['Date'].max()
     latest_df = df[df['Date'] == latest_date].copy()
-    # 添加狀態欄位
     latest_df.loc[:, 'Status'] = latest_df.apply(
         lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume']
         else "已突破但成交量不足" if row['Breakout']
         else "盤整中" if row['Consolidation_Range_%'] < max_range
         else "前段上升", axis=1
     )
-    # 檢查 latest_df 的欄位
     st.write("篩選結果的欄位：", latest_df.columns.tolist())
     
-    # 重命名欄位以更直觀
     display_df = latest_df.rename(columns={
         'Ticker': '股票代碼',
         'Date': '日期',
@@ -120,9 +131,7 @@ if 'df' in st.session_state:
         'Breakout_Volume': '突破成交量'
     })
     
-    # 定義要顯示的欄位
     desired_columns = ['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']
-    # 檢查哪些欄位存在
     available_columns = [col for col in desired_columns if col in display_df.columns]
     missing_columns = [col for col in desired_columns if col not in display_df.columns]
     
@@ -140,22 +149,18 @@ if 'df' in st.session_state:
     else:
         st.error("無可顯示的欄位，請檢查篩選條件或數據來源。")
     
-    # 繪製符合條件的股票走勢圖
     unique_tickers = latest_df['Ticker'].unique()
-    if len(unique_tickers) > 0:  # 只要有符合條件的股票就繪製圖表
+    if len(unique_tickers) > 0:
         st.subheader("符合條件的股票走勢（按 22 日內漲幅排序）")
-        # 按 22 日內漲幅排序
         if 'Prior_Rise_22_%' in latest_df.columns:
             top_df = latest_df.groupby('Ticker').agg({'Prior_Rise_22_%': 'max'}).reset_index()
             top_df = top_df.sort_values(by='Prior_Rise_22_%', ascending=False)
-            # 如果股票數量大於 5，則只取前 5 隻；否則取所有股票
             num_to_display = min(len(unique_tickers), 5)
             top_tickers = top_df['Ticker'].head(num_to_display).tolist()
             plot_top_5_stocks(top_tickers)
         else:
             st.warning("無法繪製圖表：缺少 'Prior_Rise_22_%' 欄位，無法排序股票。")
     
-    # 繪製突破股票圖表
     breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume']]
     if not breakout_df.empty:
         st.subheader("當前突破股票（可買入）")
