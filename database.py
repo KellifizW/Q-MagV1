@@ -43,12 +43,12 @@ def init_repo():
 
         st.write("調試：檢查 st.secrets 內容")
         st.write(f"st.secrets 可用鍵：{list(st.secrets.keys())}")
-        if "github_token" not in st.secrets:
-            logger.error("st.secrets 中未找到 github_token")
-            st.error("未找到 'github_token'，請在 Streamlit Cloud 的 Secrets 中配置為：github_token = \"your_token\"")
+        if "TOKEN" not in st.secrets:
+            logger.error("st.secrets 中未找到 TOKEN")
+            st.error("未找到 'TOKEN'，請在 Streamlit Cloud 的 Secrets 中配置為：TOKEN = \"your_token\"")
             return None
-        token = st.secrets["github_token"]
-        st.write("成功從 st.secrets 獲取 github_token")
+        token = st.secrets["TOKEN"]
+        st.write("成功從 st.secrets 獲取 TOKEN")
 
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         subprocess.run(['git', 'remote', 'remove', 'origin'], capture_output=True, text=True)
@@ -80,12 +80,12 @@ def push_to_github(repo, message="Update stocks.db"):
         subprocess.run(['git', 'add', 'tickers.csv'], check=True, capture_output=True, text=True)
         subprocess.run(['git', 'commit', '-m', message], check=True, capture_output=True, text=True)
         
-        if "github_token" not in st.secrets:
-            logger.error("st.secrets 中未找到 github_token")
-            st.error("未找到 'github_token'，請在 Streamlit Cloud 的 Secrets 中配置為：github_token = \"your_token\"")
+        if "TOKEN" not in st.secrets:
+            logger.error("st.secrets 中未找到 TOKEN")
+            st.error("未找到 'TOKEN'，請在 Streamlit Cloud 的 Secrets 中配置為：TOKEN = \"your_token\"")
             return False
-        token = st.secrets["github_token"]
-        st.write("成功從 st.secrets 獲取 github_token 用於推送")
+        token = st.secrets["TOKEN"]
+        st.write("成功從 st.secrets 獲取 TOKEN 用於推送")
         
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
