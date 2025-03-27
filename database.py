@@ -8,13 +8,11 @@ import git
 import shutil
 import streamlit as st
 
-# GitHub 配置（需替換為你的資訊）
-REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"  # 替換為你的存儲庫 URL
-TOKEN = "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"  # 替換為你的 GitHub Token
-REPO_DIR = "Q-MagV1"
+# 配置
+REPO_URL = "https://github.com/YOUR_USERNAME/stock-screening.git"  # 替換為你的存儲庫 URL
+TOKEN = "ghp_xxxxxxxxxxxxxxxxxxxx"  # 替換為你的 GitHub Token
+REPO_DIR = "repo"
 DB_PATH = os.path.join(REPO_DIR, "stocks.db")
-
-# 交易日曆
 nasdaq = mcal.get_calendar('NASDAQ')
 
 def clone_repo():
@@ -30,11 +28,11 @@ def push_to_github(repo, message="Update stocks.db"):
     repo.git.commit(m=message)
     repo.git.push()
 
-def initialize_database(tickers, db_path=DB_PATH, trading_days=130):
+def initialize_database(tickers, db_path=DB_PATH):
     """初始化資料庫，只下載 tickers.csv 中的股票"""
     conn = sqlite3.connect(db_path)
     end_date = datetime.now().date()
-    start_date = nasdaq.schedule(start_date=end_date - timedelta(days=trading_days*2), end_date=end_date).index[0].date()
+    start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
     
     for i, ticker in enumerate(tickers):
         st.write(f"初始化：下載 {ticker} ({i+1}/{len(tickers)})...")
@@ -77,7 +75,7 @@ def update_database(tickers, db_path=DB_PATH):
     conn.close()
     return True
 
-def extend_sp500(tickers_sp500, db_path=DB_PATH, trading_days=130):
+def extend_sp500(tickers_sp500, db_path=DB_PATH):
     """動態補充 S&P 500 缺少的股票"""
     conn = sqlite3.connect(db_path)
     existing_tickers = pd.read_sql_query("SELECT DISTINCT Ticker FROM stocks", conn)['Ticker'].tolist()
@@ -86,7 +84,7 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, trading_days=130):
     if missing_tickers:
         st.write(f"檢測到 {len(missing_tickers)} 隻 S&P 500 股票缺失，正在補充...")
         end_date = datetime.now().date()
-        start_date = nasdaq.schedule(start_date=end_date - timedelta(days=trading_days*2), end_date=end_date).index[0].date()
+        start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
         
         for i, ticker in enumerate(missing_tickers):
             st.write(f"補充 S&P 500 股票：{ticker} ({i+1}/{len(missing_tickers)})...")
@@ -101,7 +99,7 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, trading_days=130):
     conn.close()
     return len(missing_tickers) > 0
 
-def fetch_stock_data(tickers, stock_pool=None, db_path=DB_PATH, trading_days=130):
+def fetch_stock_data(tickers, stock_pool=None, db_path=DB_PATH, trading_days=70):
     """從 SQLite 查詢數據，若是 S&P 500 則先擴展"""
     conn = sqlite3.connect(db_path)
     
@@ -112,7 +110,7 @@ def fetch_stock_data(tickers, stock_pool=None, db_path=DB_PATH, trading_days=130
             st.write("S&P 500 股票補充完成，更新資料庫...")
     
     end_date = datetime.now().date()
-    start_date = nasdaq.schedule(start_date=end_date - timedelta(days=trading_days*2), end_date=end_date).index[-trading_days].date()
+    start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[-trading_days].date()
     
     query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?']*len(tickers))}) AND Date >= ?"
     data = pd.read_sql_query(query, conn, params=tickers + [start_date.strftime('%Y-%m-%d')], index_col='Date', parse_dates=True)
