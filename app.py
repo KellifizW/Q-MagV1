@@ -1,394 +1,257 @@
-import os
-import subprocess
-import sqlite3
-import pandas as pd
-import yfinance as yf
-from datetime import datetime, timedelta
-import pandas_market_calendars as mcal
 import streamlit as st
-import logging
-import time
-import requests
+import pandas as pd
+import sqlite3
+from screening import screen_stocks, get_nasdaq_100, get_sp500, get_nasdaq_all
+from visualize import plot_top_5_stocks, plot_breakout_stocks
+from database import init_repo, push_to_github, initialize_database, update_database
+import os
+from datetime import datetime
 
-# 設置日誌
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
+DB_PATH = "./stocks.db"
 
-# 定義路徑和常量
-REPO_DIR = "."
-DB_PATH = os.path.join(REPO_DIR, "stocks.db")
-nasdaq = mcal.get_calendar('NASDAQ')
-REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
+# 檢查 stocks.db 是否存在並顯示基本信息
+if os.path.exists(DB_PATH):
+    st.write(f"找到 stocks.db，檔案大小：{os.path.getsize(DB_PATH)} bytes")
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = cursor.fetchall()
+    st.write("資料庫中的表：", tables)
+    if tables:
+        for table in tables:
+            table_name = table[0]
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            row_count = cursor.fetchone()[0]
+            st.write(f"表 {table_name} 中的記錄數：{row_count}")
+    conn.close()
+else:
+    st.error("stocks.db 不存在！")
 
-# 設置 yfinance 快取位置
-yf.set_tz_cache_location("/tmp/yfinance_cache")  # 使用 /tmp 避免權限問題
+st.title("Qullamaggie Breakout Screener")
 
-# 自訂 requests Session，擴大連線池
-session = requests.Session()
-adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
-session.mount('http://', adapter)
-session.mount('https://', adapter)
+# 配置
+REPO_DIR = "."  # Streamlit Cloud 中，檔案位於應用根目錄
+DB_PATH = os.path.join(REPO_DIR, "stocks.db")  # 即 ./stocks.db
 
-def init_repo():
-    """初始化 Git 倉庫，使用 st.secrets 獲取 GitHub Token"""
-    try:
-        os.chdir(REPO_DIR)
-        if not os.path.exists('.git'):
-            subprocess.run(['git', 'init'], check=True, capture_output=True, text=True)
-            logger.info("初始化 Git 倉庫")
+# 簡介與參考
+st.markdown("""
+### 簡介
+本程式基於 Qullamaggie Breakout 策略篩選股票，參考方法來自 [Reddit: Trade Like a Professional - Breakout Swing Trading](https://www.reddit.com/r/wallstreetbetsOGs/comments/om7h73/trade_like_a_professional_breakout_swing_trading/)。
 
-        st.write("調試：檢查 st.secrets 內容")
-        st.write(f"st.secrets 可用鍵：{list(st.secrets.keys())}")
-        if "github_token" not in st.secrets:
-            logger.error("st.secrets 中未找到 github_token")
-            st.error("未找到 'github_token'，請在 Streamlit Cloud 的 Secrets 中配置為：github_token = \"your_token\"")
-            return None
-        token = st.secrets["github_token"]
-        st.write("成功從 st.secrets 獲取 github_token")
+#### 程式最終目的：
+1. **偵測 Qullamaggie Breakout 特徵**：檢查最近 30 日內是否有股票符合 Qullamaggie 描述的 Breakout 特徵：
+   - 前段顯著漲幅（22 日內漲幅 > 22 日內最小漲幅，67 日內漲幅 > 67 日內最小漲幅）。
+   - 隨後進入低波動盤整（盤整範圍 < 最大盤整範圍），成交量下降。
+   - 價格突破盤整區間高點，且成交量放大（> 過去 10 天均量的 1.5 倍）。
+2. **識別買入時機並標記信號**：如果股票已到達買入時機（突破當天），在圖表上標記買入信號。
 
-        remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
-        subprocess.run(['git', 'remote', 'remove', 'origin'], capture_output=True, text=True)
-        subprocess.run(['git', 'remote', 'add', 'origin', remote_url], check=True, capture_output=True, text=True)
-        
-        subprocess.run(['git', 'config', 'user.name', 'KellifizW'], check=True)
-        subprocess.run(['git', 'config', 'user.email', 'your.email@example.com'], check=True)
-        subprocess.run(['git', 'config', 'core.autocrlf', 'true'], check=True)
-        
-        logger.info("Git 倉庫初始化完成")
-        st.write("成功初始化 Git 倉庫")
-        return True
-    except Exception as e:
-        logger.error(f"Git 倉庫初始化失敗：{str(e)}")
-        st.error(f"初始化 Git 倉庫失敗：{str(e)}")
-        return None
+#### 篩選結果說明：
+- 篩選結果顯示最近一天的數據，包含股票的當前狀態（例如「已突破且可買入」、「盤整中」）。
+- 顯示所有符合條件的股票（最多 5 隻），按 22 日內漲幅排序，繪製 3 個月走勢圖（包含股價、成交量、10 日均線及 MACD）。
 
-def push_to_github(repo, message="Update stocks.db"):
-    """推送變更到 GitHub"""
-    try:
-        os.chdir(REPO_DIR)
-        status = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True)
-        if not status.stdout.strip():
-            logger.info("沒有需要提交的變更")
-            st.write("沒有變更需要推送")
-            return True
-        
-        subprocess.run(['git', 'add', 'stocks.db'], check=True, capture_output=True, text=True)
-        subprocess.run(['git', 'add', 'tickers.csv'], check=True, capture_output=True, text=True)
-        subprocess.run(['git', 'commit', '-m', message], check=True, capture_output=True, text=True)
-        
-        if "github_token" not in st.secrets:
-            logger.error("st.secrets 中未找到 github_token")
-            st.error("未找到 'github_token'，請在 Streamlit Cloud 的 Secrets 中配置為：github_token = \"your_token\"")
-            return False
-        token = st.secrets["github_token"]
-        st.write("成功從 st.secrets 獲取 github_token 用於推送")
-        
-        remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
-        branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
-        subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
-        
-        logger.info(f"成功推送至 GitHub，提交訊息：{message}")
-        st.write(f"已推送至 GitHub: {message}")
-        return True
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Git 推送失敗：{e.stderr}")
-        st.error(f"推送至 GitHub 失敗: {e.stderr}")
-        return False
-    except Exception as e:
-        logger.error(f"Git 推送發生未知錯誤：{str(e)}")
-        st.error(f"推送至 GitHub 發生未知錯誤: {e}")
-        return False
+#### 補充說明：
+- **原作者 Qullamaggie 使用的參數**（根據 Reddit 文章）：
+  - 前段上升天數：20 天
+  - 盤整天數：10 天
+  - 22 日內最小漲幅：10%
+  - 67 日內最小漲幅：40%
+  - 最大盤整範圍：10%
+  - 最小 ADR：2%
+""")
 
-def download_with_retry(tickers, start, end, retries=5, delay=10):
-    """帶重試機制的股票數據下載"""
-    for attempt in range(retries):
-        try:
-            logger.info(f"嘗試下載 {tickers}，第 {attempt + 1} 次")
-            st.write(f"嘗試下載 {len(tickers)} 檔股票，第 {attempt + 1} 次")
-            data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False, threads=False, session=session)
-            if not data.empty:
-                logger.info(f"成功下載 {len(tickers)} 檔股票數據")
-                st.write(f"成功下載 {len(tickers)} 檔股票數據")
-                return data
+# 初始化現有的 Git 倉庫
+repo = init_repo()
+if repo is None:
+    st.error("無法初始化 GitHub 倉庫，請檢查 TOKEN 配置或倉庫設置")
+    st.stop()
+
+# 讀取 tickers.csv
+try:
+    tickers_df = pd.read_csv("tickers.csv")  # 直接讀取根目錄下的 tickers.csv
+    csv_tickers = tickers_df['Ticker'].tolist()
+except FileNotFoundError:
+    st.error("找不到 tickers.csv，請確保該檔案已上傳至 GitHub 倉庫根目錄")
+    st.stop()
+
+# 資料庫初始化與更新邏輯
+if not os.path.exists(DB_PATH):
+    st.write("初始化資料庫...")
+    if initialize_database(csv_tickers, repo=repo):
+        push_to_github(repo, "Initial stocks.db creation")
+    else:
+        st.error("初始化資料庫失敗，無法繼續操作")
+else:
+    st.write("更新資料庫...")
+    if update_database(csv_tickers, repo=repo):
+        push_to_github(repo, f"Daily update: {datetime.now().strftime('%Y-%m-%d')}")
+
+# 新增功能 1：檢查股票池
+def check_stock_pool(tickers_to_check):
+    """檢查 stocks.db 是否包含指定股票池的數據"""
+    conn = sqlite3.connect(DB_PATH)
+    existing_tickers = pd.read_sql_query("SELECT DISTINCT Ticker FROM stocks", conn)['Ticker'].tolist()
+    conn.close()
+    
+    missing_tickers = [ticker for ticker in tickers_to_check if ticker not in existing_tickers]
+    present_tickers = [ticker for ticker in tickers_to_check if ticker in existing_tickers]
+    
+    st.write(f"股票池總數：{len(tickers_to_check)} 隻股票")
+    st.write(f"已在 stocks.db 中的股票數：{len(present_tickers)} 隻")
+    st.write(f"缺失的股票數：{len(missing_tickers)} 隻")
+    if missing_tickers:
+        st.write(f"缺失的股票（前 10 個）：{missing_tickers[:10]}")
+    else:
+        st.success("所有股票數據均存在於 stocks.db 中！")
+
+# 新增功能 2：強制重新下載
+def force_redownload(tickers, repo):
+    """強制重新下載所有 tickers.csv 中的股票數據"""
+    with st.spinner("正在強制重新下載所有股票數據..."):
+        success = initialize_database(tickers, repo=repo)
+        if success:
+            push_success = push_to_github(repo, f"Forced re-download: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            if push_success:
+                st.success("已完成強制重新下載並更新 stocks.db！")
             else:
-                logger.warning(f"批次數據為空，重試 {attempt + 1}/{retries}")
-                st.write(f"批次數據為空，重試 {attempt + 1}/{retries}")
-        except Exception as e:
-            logger.warning(f"下載失敗: {e}，重試 {attempt + 1}/{retries}")
-            st.write(f"下載失敗: {e}，重試 {attempt + 1}/{retries}")
-            time.sleep(delay * (attempt + 1))
-    logger.error(f"下載 {tickers} 失敗，已達最大重試次數")
-    st.error(f"下載 {len(tickers)} 檔股票失敗，已達最大重試次數")
-    return None
-
-def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
-    """初始化資料庫"""
-    if repo is None:
-        logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
-        st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
-        return False
-
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''CREATE TABLE IF NOT EXISTS stocks (
-            Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
-            PRIMARY KEY (Date, Ticker))''')
-        cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
-        cursor.execute("DELETE FROM stocks")
-        cursor.execute("DELETE FROM metadata")
-        
-        end_date = datetime.now().date()
-        start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
-        
-        total_batches = (len(tickers) + batch_size - 1) // batch_size
-        for i in range(0, len(tickers), batch_size):
-            batch_tickers = tickers[i:i + batch_size]
-            batch_num = i // batch_size + 1
-            st.write(f"初始化：下載批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票)")
-            
-            data = download_with_retry(batch_tickers, start=start_date, end=end_date)
-            if data is None:
-                logger.warning(f"批次 {batch_num} 下載失敗，跳過：{batch_tickers}")
-                continue
-            
-            df = data.reset_index()
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in df.columns]
-            
-            tickers_in_batch = list({col.split('_')[0] for col in df.columns if '_' in col})
-            all_data = []
-            for ticker in tickers_in_batch:
-                ticker_cols = [col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']
-                ticker_df = df[ticker_cols].copy()
-                ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
-                ticker_df['Ticker'] = ticker
-                all_data.append(ticker_df)
-            
-            pivoted_df = pd.concat(all_data, ignore_index=True)
-            pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
-            
-            for _, row in pivoted_df.iterrows():
-                cursor.execute('''INSERT OR REPLACE INTO stocks 
-                    (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
-                    str(row['Date']), str(row['Ticker']),
-                    float(row['Open']) if pd.notna(row['Open']) else None,
-                    float(row['High']) if pd.notna(row['High']) else None,
-                    float(row['Low']) if pd.notna(row['Low']) else None,
-                    float(row['Close']) if pd.notna(row['Close']) else None,
-                    float(row['Close']) if pd.notna(row['Close']) else None,
-                    int(row['Volume']) if pd.notna(row['Volume']) else 0))
-            
-            conn.commit()
-            if batch_num % 10 == 0 or batch_num == total_batches:
-                push_to_github(repo, f"Initialized {batch_num} batches of stock data")
-            time.sleep(5)  # 增加批次間延遲
-        
-        cursor.execute("INSERT INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
-        conn.commit()
-        push_to_github(repo, "Final initialization of stocks.db")
-        conn.close()
-        
-        logger.info("資料庫初始化完成")
-        st.write("資料庫初始化完成")
-        return True
-    except Exception as e:
-        logger.error(f"資料庫初始化失敗：{str(e)}")
-        st.error(f"資料庫初始化失敗：{str(e)}")
-        return False
-
-def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
-    """更新資料庫"""
-    if repo is None:
-        logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
-        st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
-        return False
-
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        current_date = datetime.now().date()
-        cursor.execute("SELECT last_updated FROM metadata")
-        last_updated = cursor.fetchone()
-        if last_updated:
-            try:
-                last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d %H:%M:%S').date()
-            except ValueError:
-                last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d').date()
-            st.write(f"上次更新日期：{last_updated_date}")
+                st.error("資料庫重新下載成功，但推送至 GitHub 失敗，請檢查 GitHub 配置")
         else:
-            last_updated_date = current_date - timedelta(days=1)
-            st.write("無上次更新記錄，使用前一天作為起始日期")
-        
-        schedule = nasdaq.schedule(start_date=last_updated_date, end_date=current_date)
-        if len(schedule) <= 1:
-            logger.info("今日無新數據，已跳過更新")
-            st.write("今日無新數據，已跳過更新")
-            conn.close()
-            return False
-        
-        start_date = last_updated_date + timedelta(days=1)
-        total_batches = (len(tickers) + batch_size - 1) // batch_size
-        
-        for i in range(0, len(tickers), batch_size):
-            batch_tickers = tickers[i:i + batch_size]
-            batch_num = i // batch_size + 1
-            st.write(f"更新：下載批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票)")
-            
-            data = download_with_retry(batch_tickers, start=start_date, end=current_date)
-            if data is None:
-                logger.warning(f"批次 {batch_num} 下載失敗，跳過：{batch_tickers}")
-                continue
-            
-            df = data.reset_index()
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in df.columns]
-            
-            tickers_in_batch = list({col.split('_')[0] for col in df.columns if '_' in col})
-            all_data = []
-            for ticker in tickers_in_batch:
-                ticker_cols = [col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']
-                ticker_df = df[ticker_cols].copy()
-                ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
-                ticker_df['Ticker'] = ticker
-                all_data.append(ticker_df)
-            
-            pivoted_df = pd.concat(all_data, ignore_index=True)
-            pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
-            
-            for _, row in pivoted_df.iterrows():
-                cursor.execute('''INSERT OR REPLACE INTO stocks 
-                    (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
-                    str(row['Date']), str(row['Ticker']),
-                    float(row['Open']) if pd.notna(row['Open']) else None,
-                    float(row['High']) if pd.notna(row['High']) else None,
-                    float(row['Low']) if pd.notna(row['Low']) else None,
-                    float(row['Close']) if pd.notna(row['Close']) else None,
-                    float(row['Close']) if pd.notna(row['Close']) else None,
-                    int(row['Volume']) if pd.notna(row['Volume']) else 0))
-            
-            conn.commit()
-            if batch_num % 10 == 0 or batch_num == total_batches:
-                push_to_github(repo, f"Updated {batch_num} batches of stock data")
-            time.sleep(5)
-        
-        cursor.execute("UPDATE metadata SET last_updated = ?", (current_date.strftime('%Y-%m-%d'),))
-        conn.commit()
-        push_to_github(repo, "Final update of stocks.db")
-        conn.close()
-        
-        logger.info("資料庫更新完成")
-        st.write("資料庫更新完成")
-        return True
-    except Exception as e:
-        logger.error(f"資料庫更新失敗：{str(e)}")
-        st.error(f"資料庫更新失敗：{str(e)}")
-        return False
+            st.error("強制重新下載失敗，請檢查日誌或網絡連接")
 
-def fetch_stock_data(tickers, stock_pool=None, db_path=DB_PATH, trading_days=70):
-    """從資料庫中提取股票數據"""
-    try:
-        conn = sqlite3.connect(db_path)
-        end_date = datetime.now().date()
-        start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[-trading_days].date()
-        
-        query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?']*len(tickers))}) AND Date >= ?"
-        data = pd.read_sql_query(query, conn, params=tickers + [start_date.strftime('%Y-%m-%d')], index_col='Date', parse_dates=True)
-        conn.close()
-        
-        if data.empty:
-            logger.error("資料庫中無符合條件的數據")
-            st.error("資料庫中無符合條件的數據，請檢查初始化是否成功")
-            return None
-        return data.pivot(columns='Ticker')
-    except Exception as e:
-        logger.error(f"提取股票數據失敗：{str(e)}")
-        st.error(f"提取股票數據失敗：{str(e)}")
-        return None
+# 用戶輸入參數
+with st.sidebar.form(key="screening_form"):
+    st.header("篩選參數")
+    index_option = st.selectbox("選擇股票池", ["NASDAQ 100", "S&P 500", "NASDAQ All"])
+    prior_days = st.slider("前段上升天數", 10, 30, 20)
+    consol_days = st.slider(
+        "盤整天數", 5, 15, 10,
+        help="盤整天數是指股票在突破前低波動盤整的天數。計算方式：從最近一天向前回溯指定天數，檢查這段期間的價格波動範圍是否小於最大盤整範圍。"
+    )
+    min_rise_22 = st.slider("22 日內最小漲幅 (%)", 0, 50, 10, help="股票在過去 22 日內的最小漲幅要求")
+    min_rise_67 = st.slider("67 日內最小漲幅 (%)", 0, 100, 40, help="股票在過去 67 日內的最小漲幅要求")
+    max_range = st.slider("最大盤整範圍 (%)", 3, 15, 10, help="增加此值以放寬整理區間")
+    min_adr = st.slider("最小 ADR (%)", 0, 10, 2, help="設為 0 以納入更多股票")
+    max_stocks = st.slider("最大篩選股票數量", 10, 500, 50, help="限制股票數量以加快處理速度，僅適用於 NASDAQ All")
+    submit_button = st.form_submit_button("運行篩選")
 
-def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
-    """擴展 S&P 500 股票數據"""
-    if repo is None:
-        logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
-        st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
-        return False
+# 新增按鈕：檢查股票池和強制重新下載
+st.sidebar.subheader("資料庫管理")
+if st.sidebar.button("檢查股票池"):
+    if index_option == "NASDAQ 100":
+        tickers_to_check = get_nasdaq_100(csv_tickers)
+    elif index_option == "S&P 500":
+        tickers_to_check = get_sp500()
+    else:
+        tickers_to_check = get_nasdaq_all(csv_tickers)[:max_stocks]
+    check_stock_pool(tickers_to_check)
 
-    try:
-        conn = sqlite3.connect(db_path)
-        existing_tickers = pd.read_sql_query("SELECT DISTINCT Ticker FROM stocks", conn)['Ticker'].tolist()
-        missing_tickers = [ticker for ticker in tickers_sp500 if ticker not in existing_tickers]
-        
-        if not missing_tickers:
-            logger.info("無缺失的 S&P 500 股票")
-            st.write("無缺失的 S&P 500 股票")
-            conn.close()
-            return False
-        
-        st.write(f"檢測到 {len(missing_tickers)} 隻 S&P 500 股票缺失，正在補充...")
-        end_date = datetime.now().date()
-        start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
-        
-        total_batches = (len(missing_tickers) + batch_size - 1) // batch_size
-        for i in range(0, len(missing_tickers), batch_size):
-            batch_tickers = missing_tickers[i:i + batch_size]
-            batch_num = i // batch_size + 1
-            st.write(f"補充 S&P 500：下載批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票)")
-            
-            data = download_with_retry(batch_tickers, start=start_date, end=end_date)
-            if data is None:
-                logger.warning(f"批次 {batch_num} 下載失敗，跳過：{batch_tickers}")
-                continue
-            
-            df = data.reset_index()
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in df.columns]
-            
-            tickers_in_batch = list({col.split('_')[0] for col in df.columns if '_' in col})
-            all_data = []
-            for ticker in tickers_in_batch:
-                ticker_cols = [col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']
-                ticker_df = df[ticker_cols].copy()
-                ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
-                ticker_df['Ticker'] = ticker
-                all_data.append(ticker_df)
-            
-            pivoted_df = pd.concat(all_data, ignore_index=True)
-            pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
-            
-            cursor = conn.cursor()
-            for _, row in pivoted_df.iterrows():
-                cursor.execute('''INSERT OR REPLACE INTO stocks 
-                    (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
-                    str(row['Date']), str(row['Ticker']),
-                    float(row['Open']) if pd.notna(row['Open']) else None,
-                    float(row['High']) if pd.notna(row['High']) else None,
-                    float(row['Low']) if pd.notna(row['Low']) else None,
-                    float(row['Close']) if pd.notna(row['Close']) else None,
-                    float(row['Close']) if pd.notna(row['Close']) else None,
-                    int(row['Volume']) if pd.notna(row['Volume']) else 0))
-            
-            conn.commit()
-            if batch_num % 10 == 0 or batch_num == total_batches:
-                push_to_github(repo, f"Extended S&P 500 with {batch_num} batches")
-            time.sleep(5)
-        
-        conn.close()
-        if batch_num % 10 != 0:
-            push_to_github(repo, "Final S&P 500 extension")
-        
-        logger.info("S&P 500 股票補充完成")
-        st.write("S&P 500 股票補充完成")
-        return True
-    except Exception as e:
-        logger.error(f"S&P 500 股票補充失敗：{str(e)}")
-        st.error(f"S&P 500 股票補充失敗：{str(e)}")
-        return False
+if st.sidebar.button("強制重新下載"):
+    force_redownload(csv_tickers, repo)
+
+# 重置按鈕
+if st.sidebar.button("重置篩選"):
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
+
+# 篩選邏輯
+if submit_button:
+    if 'df' in st.session_state:
+        del st.session_state['df']
+    
+    if index_option == "NASDAQ 100":
+        tickers = get_nasdaq_100(csv_tickers)
+    elif index_option == "S&P 500":
+        tickers = get_sp500()
+    else:
+        tickers = get_nasdaq_all(csv_tickers)[:max_stocks]
+    st.session_state['tickers'] = tickers
+    
+    with st.spinner("篩選中..."):
+        progress_bar = st.progress(0)
+        df = screen_stocks(tickers, index_option, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr, progress_bar)
+        progress_bar.progress(100)
+        if 'stock_data' in st.session_state:
+            st.write(f"批量數據已載入，涵蓋 {len(st.session_state['stock_data'].columns.get_level_values(1))} 檔股票")
+        if df.empty:
+            st.warning("無符合條件的股票。請嘗試以下調整：")
+            st.write("- **降低 22 日內最小漲幅** (目前: {}%)：嘗試設為 0-10%".format(min_rise_22))
+            st.write("- **降低 67 日內最小漲幅** (目前: {}%)：嘗試設為 20-40%".format(min_rise_67))
+            st.write("- **增加最大盤整範圍** (目前: {}%)：嘗試設為 10-15%".format(max_range))
+            st.write("- **降低最小 ADR** (目前: {}%)：嘗試設為 0-2%".format(min_adr))
+            st.write("- **擴大股票池**：選擇 NASDAQ All 並增加最大篩選股票數量")
+        else:
+            st.session_state['df'] = df
+            st.success(f"找到 {len(df)} 隻符合條件的股票（{len(df['Ticker'].unique())} 隻非重複股票）")
+
+# 顯示篩選結果
+if 'df' in st.session_state:
+    df = st.session_state['df']
+    st.subheader("篩選結果")
+    df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+    latest_date = df['Date'].max()
+    latest_df = df[df['Date'] == latest_date].copy()
+    latest_df.loc[:, 'Status'] = latest_df.apply(
+        lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume']
+        else "已突破但成交量不足" if row['Breakout']
+        else "盤整中" if row['Consolidation_Range_%'] < max_range
+        else "前段上升", axis=1
+    )
+    st.write("篩選結果的欄位：", latest_df.columns.tolist())
+    
+    display_df = latest_df.rename(columns={
+        'Ticker': '股票代碼',
+        'Date': '日期',
+        'Price': '價格',
+        'Prior_Rise_22_%': '22 日內漲幅 (%)',
+        'Prior_Rise_67_%': '67 日內漲幅 (%)',
+        'Consolidation_Range_%': '盤整範圍 (%)',
+        'ADR_%': '平均日波幅 (%)',
+        'Breakout': '是否突破',
+        'Breakout_Volume': '突破成交量'
+    })
+    
+    desired_columns = ['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']
+    available_columns = [col for col in desired_columns if col in display_df.columns]
+    missing_columns = [col for col in desired_columns if col not in display_df.columns]
+    
+    if missing_columns:
+        st.warning(f"以下欄位在篩選結果中缺失：{missing_columns}")
+        st.write("可能原因：")
+        st.write("- 篩選條件過嚴（例如 22 日內最小漲幅或 67 日內最小漲幅過高），導致無股票符合條件。")
+        st.write("- 數據下載失敗，部分股票數據缺失。")
+        st.write("建議：")
+        st.write("- 降低 22 日內最小漲幅或 67 日內最小漲幅。")
+        st.write("- 檢查網絡連線，確保數據下載正常。")
+    
+    if available_columns:
+        st.dataframe(display_df[available_columns])
+    else:
+        st.error("無可顯示的欄位，請檢查篩選條件或數據來源。")
+    
+    unique_tickers = latest_df['Ticker'].unique()
+    if len(unique_tickers) > 0:
+        st.subheader("符合條件的股票走勢（按 22 日內漲幅排序）")
+        if 'Prior_Rise_22_%' in latest_df.columns:
+            top_df = latest_df.groupby('Ticker').agg({'Prior_Rise_22_%': 'max'}).reset_index()
+            top_df = top_df.sort_values(by='Prior_Rise_22_%', ascending=False)
+            num_to_display = min(len(unique_tickers), 5)
+            top_tickers = top_df['Ticker'].head(num_to_display).tolist()
+            plot_top_5_stocks(top_tickers)
+        else:
+            st.warning("無法繪製圖表：缺少 'Prior_Rise_22_%' 欄位，無法排序股票。")
+    
+    breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume']]
+    if not breakout_df.empty:
+        st.subheader("當前突破股票（可買入）")
+        breakout_tickers = breakout_df['Ticker'].unique()
+        plot_breakout_stocks(breakout_tickers, consol_days)
+    else:
+        st.info("當前無突破股票（無可買入股票）。可能原因：")
+        if latest_df['Breakout'].sum() == 0:
+            st.write("- 無股票價格突破盤整區間高點。嘗試增加最大盤整範圍或降低 22 日/67 日內最小漲幅。")
+        elif latest_df['Breakout_Volume'].sum() == 0:
+            st.write("- 突破股票的成交量不足（需 > 過去 10 天均量的 1.5 倍）。嘗試調整成交量條件。")
+
+# 顯示篩選範圍
+tickers = st.session_state.get('tickers', [])
+st.write(f"篩選範圍：{index_option} ({len(tickers)} 隻股票)")
