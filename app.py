@@ -9,7 +9,7 @@ from datetime import datetime
 st.title("Qullamaggie Breakout Screener")
 
 # 配置
-REPO_DIR = "repo"
+REPO_DIR = "Q-MagV1"
 DB_PATH = os.path.join(REPO_DIR, "stocks.db")
 
 # 簡介與參考
