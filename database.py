@@ -205,7 +205,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
     """更新資料庫"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
-        st.error("未提供 Git 倉庫物件， compléter至 GitHub")
+        st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         return False
 
     try:
@@ -217,9 +217,16 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
         cursor.execute("SELECT last_updated FROM metadata")
         last_updated = cursor.fetchone()
         if last_updated:
-            last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d').date()
+            # 處理包含時間的格式，例如 '2025-03-27 21:46:20'
+            try:
+                last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d %H:%M:%S').date()
+            except ValueError:
+                # 如果格式僅有日期，嘗試只解析日期
+                last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d').date()
+            st.write(f"上次更新日期：{last_updated_date}")
         else:
             last_updated_date = current_date - timedelta(days=1)
+            st.write("無上次更新記錄，使用前一天作為起始日期")
         
         schedule = nasdaq.schedule(start_date=last_updated_date, end_date=current_date)
         if len(schedule) <= 1:
@@ -275,7 +282,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
                 push_to_github(repo, f"Updated {batch_num} batches of stock data")
             time.sleep(2)
         
-        # 更新元數據
+        # 更新元數據（僅存日期）
         cursor.execute("UPDATE metadata SET last_updated = ?", (current_date.strftime('%Y-%m-%d'),))
         conn.commit()
         push_to_github(repo, "Final update of stocks.db")
