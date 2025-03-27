@@ -8,6 +8,7 @@ import pandas_market_calendars as mcal
 import streamlit as st
 import logging
 import time
+import requests
 
 # 設置日誌
 logging.basicConfig(
@@ -23,6 +24,15 @@ DB_PATH = os.path.join(REPO_DIR, "stocks.db")
 nasdaq = mcal.get_calendar('NASDAQ')
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 
+# 設置 yfinance 快取位置
+yf.set_tz_cache_location("/tmp/yfinance_cache")  # 使用 /tmp 避免權限問題
+
+# 自訂 requests Session，擴大連線池
+session = requests.Session()
+adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
+session.mount('http://', adapter)
+session.mount('https://', adapter)
+
 def init_repo():
     """初始化 Git 倉庫，使用 st.secrets 獲取 GitHub Token"""
     try:
@@ -31,22 +41,19 @@ def init_repo():
             subprocess.run(['git', 'init'], check=True, capture_output=True, text=True)
             logger.info("初始化 Git 倉庫")
 
-        # 調試：檢查 st.secrets 是否包含 TOKEN
         st.write("調試：檢查 st.secrets 內容")
         st.write(f"st.secrets 可用鍵：{list(st.secrets.keys())}")
-        if "TOKEN" not in st.secrets:
-            logger.error("st.secrets 中未找到 TOKEN")
-            st.error("未找到 'TOKEN'，請在 Streamlit Cloud 的 Secrets 中配置為：TOKEN = \"your_token\"")
+        if "github_token" not in st.secrets:
+            logger.error("st.secrets 中未找到 github_token")
+            st.error("未找到 'github_token'，請在 Streamlit Cloud 的 Secrets 中配置為：github_token = \"your_token\"")
             return None
-        token = st.secrets["TOKEN"]
-        st.write("成功從 st.secrets 獲取 TOKEN")
+        token = st.secrets["github_token"]
+        st.write("成功從 st.secrets 獲取 github_token")
 
-        # 配置遠端倉庫
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         subprocess.run(['git', 'remote', 'remove', 'origin'], capture_output=True, text=True)
         subprocess.run(['git', 'remote', 'add', 'origin', remote_url], check=True, capture_output=True, text=True)
         
-        # 配置 Git 用戶信息
         subprocess.run(['git', 'config', 'user.name', 'KellifizW'], check=True)
         subprocess.run(['git', 'config', 'user.email', 'your.email@example.com'], check=True)
         subprocess.run(['git', 'config', 'core.autocrlf', 'true'], check=True)
@@ -63,26 +70,22 @@ def push_to_github(repo, message="Update stocks.db"):
     """推送變更到 GitHub"""
     try:
         os.chdir(REPO_DIR)
-        
-        # 檢查是否有變更
         status = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True)
         if not status.stdout.strip():
             logger.info("沒有需要提交的變更")
             st.write("沒有變更需要推送")
             return True
         
-        # 添加並提交變更
         subprocess.run(['git', 'add', 'stocks.db'], check=True, capture_output=True, text=True)
         subprocess.run(['git', 'add', 'tickers.csv'], check=True, capture_output=True, text=True)
         subprocess.run(['git', 'commit', '-m', message], check=True, capture_output=True, text=True)
         
-        # 使用 st.secrets 中的 Token 推送
-        if "TOKEN" not in st.secrets:
-            logger.error("st.secrets 中未找到 TOKEN")
-            st.error("未找到 'TOKEN'，請在 Streamlit Cloud 的 Secrets 中配置為：TOKEN = \"your_token\"")
+        if "github_token" not in st.secrets:
+            logger.error("st.secrets 中未找到 github_token")
+            st.error("未找到 'github_token'，請在 Streamlit Cloud 的 Secrets 中配置為：github_token = \"your_token\"")
             return False
-        token = st.secrets["TOKEN"]
-        st.write("成功從 st.secrets 獲取 TOKEN 用於推送")
+        token = st.secrets["github_token"]
+        st.write("成功從 st.secrets 獲取 github_token 用於推送")
         
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
@@ -100,14 +103,16 @@ def push_to_github(repo, message="Update stocks.db"):
         st.error(f"推送至 GitHub 發生未知錯誤: {e}")
         return False
 
-def download_with_retry(tickers, start, end, retries=3, delay=5):
+def download_with_retry(tickers, start, end, retries=5, delay=10):
     """帶重試機制的股票數據下載"""
     for attempt in range(retries):
         try:
             logger.info(f"嘗試下載 {tickers}，第 {attempt + 1} 次")
             st.write(f"嘗試下載 {len(tickers)} 檔股票，第 {attempt + 1} 次")
-            data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False, threads=True)
+            data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False, threads=False, session=session)
             if not data.empty:
+                logger.info(f"成功下載 {len(tickers)} 檔股票數據")
+                st.write(f"成功下載 {len(tickers)} 檔股票數據")
                 return data
             else:
                 logger.warning(f"批次數據為空，重試 {attempt + 1}/{retries}")
@@ -120,7 +125,7 @@ def download_with_retry(tickers, start, end, retries=3, delay=5):
     st.error(f"下載 {len(tickers)} 檔股票失敗，已達最大重試次數")
     return None
 
-def initialize_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
+def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
     """初始化資料庫"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -131,7 +136,6 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # 創建表格
         cursor.execute('''CREATE TABLE IF NOT EXISTS stocks (
             Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
             PRIMARY KEY (Date, Ticker))''')
@@ -139,7 +143,6 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
         cursor.execute("DELETE FROM stocks")
         cursor.execute("DELETE FROM metadata")
         
-        # 計算日期範圍
         end_date = datetime.now().date()
         start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
         
@@ -151,9 +154,9 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
             
             data = download_with_retry(batch_tickers, start=start_date, end=end_date)
             if data is None:
+                logger.warning(f"批次 {batch_num} 下載失敗，跳過：{batch_tickers}")
                 continue
             
-            # 處理多層索引數據
             df = data.reset_index()
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in df.columns]
@@ -170,7 +173,6 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
             pivoted_df = pd.concat(all_data, ignore_index=True)
             pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
             
-            # 插入數據
             for _, row in pivoted_df.iterrows():
                 cursor.execute('''INSERT OR REPLACE INTO stocks 
                     (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
@@ -186,9 +188,8 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
             conn.commit()
             if batch_num % 10 == 0 or batch_num == total_batches:
                 push_to_github(repo, f"Initialized {batch_num} batches of stock data")
-            time.sleep(2)
+            time.sleep(5)  # 增加批次間延遲
         
-        # 更新元數據
         cursor.execute("INSERT INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
         conn.commit()
         push_to_github(repo, "Final initialization of stocks.db")
@@ -202,7 +203,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
         st.error(f"資料庫初始化失敗：{str(e)}")
         return False
 
-def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
+def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
     """更新資料庫"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -213,16 +214,13 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # 檢查最後更新時間
         current_date = datetime.now().date()
         cursor.execute("SELECT last_updated FROM metadata")
         last_updated = cursor.fetchone()
         if last_updated:
-            # 處理包含時間的格式，例如 '2025-03-27 21:46:20'
             try:
                 last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d %H:%M:%S').date()
             except ValueError:
-                # 如果格式僅有日期，嘗試只解析日期
                 last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d').date()
             st.write(f"上次更新日期：{last_updated_date}")
         else:
@@ -246,9 +244,9 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
             
             data = download_with_retry(batch_tickers, start=start_date, end=current_date)
             if data is None:
+                logger.warning(f"批次 {batch_num} 下載失敗，跳過：{batch_tickers}")
                 continue
             
-            # 處理多層索引數據
             df = data.reset_index()
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in df.columns]
@@ -265,7 +263,6 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
             pivoted_df = pd.concat(all_data, ignore_index=True)
             pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
             
-            # 插入數據
             for _, row in pivoted_df.iterrows():
                 cursor.execute('''INSERT OR REPLACE INTO stocks 
                     (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
@@ -281,9 +278,8 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
             conn.commit()
             if batch_num % 10 == 0 or batch_num == total_batches:
                 push_to_github(repo, f"Updated {batch_num} batches of stock data")
-            time.sleep(2)
+            time.sleep(5)
         
-        # 更新元數據（僅存日期）
         cursor.execute("UPDATE metadata SET last_updated = ?", (current_date.strftime('%Y-%m-%d'),))
         conn.commit()
         push_to_github(repo, "Final update of stocks.db")
@@ -318,7 +314,7 @@ def fetch_stock_data(tickers, stock_pool=None, db_path=DB_PATH, trading_days=70)
         st.error(f"提取股票數據失敗：{str(e)}")
         return None
 
-def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=50, repo=None):
+def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
     """擴展 S&P 500 股票數據"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -348,9 +344,9 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=50, repo=None):
             
             data = download_with_retry(batch_tickers, start=start_date, end=end_date)
             if data is None:
+                logger.warning(f"批次 {batch_num} 下載失敗，跳過：{batch_tickers}")
                 continue
             
-            # 處理多層索引數據
             df = data.reset_index()
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in df.columns]
@@ -367,7 +363,6 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=50, repo=None):
             pivoted_df = pd.concat(all_data, ignore_index=True)
             pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
             
-            # 插入數據
             cursor = conn.cursor()
             for _, row in pivoted_df.iterrows():
                 cursor.execute('''INSERT OR REPLACE INTO stocks 
@@ -384,7 +379,7 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=50, repo=None):
             conn.commit()
             if batch_num % 10 == 0 or batch_num == total_batches:
                 push_to_github(repo, f"Extended S&P 500 with {batch_num} batches")
-            time.sleep(2)
+            time.sleep(5)
         
         conn.close()
         if batch_num % 10 != 0:
