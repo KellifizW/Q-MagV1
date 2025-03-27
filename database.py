@@ -9,9 +9,9 @@ import shutil
 import streamlit as st
 
 # 配置
-REPO_URL = "https://github.com/YOUR_USERNAME/stock-screening.git"  # 替換為你的存儲庫 URL
-TOKEN = "ghp_xxxxxxxxxxxxxxxxxxxx"  # 替換為你的 GitHub Token
-REPO_DIR = "repo"
+REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"  # 替換為你的存儲庫 URL
+TOKEN = "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"  # 替換為你的 GitHub Token
+REPO_DIR = "Q-MagV1"
 DB_PATH = os.path.join(REPO_DIR, "stocks.db")
 nasdaq = mcal.get_calendar('NASDAQ')
 
