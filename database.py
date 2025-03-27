@@ -9,7 +9,6 @@ import shutil
 import streamlit as st
 import time
 
-# 配置路徑和參數
 REPO_DIR = "."  # Streamlit Cloud 中，檔案位於應用根目錄
 DB_PATH = os.path.join(REPO_DIR, "stocks.db")  # 即 ./stocks.db
 REPO_URL = f"https://{st.secrets['TOKEN']}@github.com/KellifizW/Q-MagV1.git"
@@ -17,10 +16,9 @@ nasdaq = mcal.get_calendar('NASDAQ')
 
 def clone_repo():
     try:
-        # 確保每次啟動時從 GitHub 獲取最新檔案
         if os.path.exists(REPO_DIR):
             for item in os.listdir(REPO_DIR):
-                if item not in ['app.py', 'requirements.txt', '.streamlit', 'database.py', 'screening.py']:
+                if item not in ['app.py', 'requirements.txt', '.streamlit', 'database.py', 'screening.py', 'visualize.py']:
                     path = os.path.join(REPO_DIR, item)
                     if os.path.isdir(path):
                         shutil.rmtree(path)
@@ -44,9 +42,8 @@ def push_to_github(repo, message="Update stocks.db"):
     try:
         repo.git.config('user.name', 'KellifizW')
         repo.git.config('user.email', 'kellyindabox@gmail.com')
-        # 添加所有可能變更的檔案
         repo.git.add("stocks.db")
-        repo.git.add("tickers.csv")  # 如果 tickers.csv 可能被修改，也推送
+        repo.git.add("tickers.csv")  # 如果 tickers.csv 可能變更，也推送
         if repo.is_dirty():
             repo.git.commit(m=message)
             repo.git.push()
