@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 import pandas_market_calendars as mcal
 import os
 import git
-import shutil
 import streamlit as st
 import time
 
@@ -14,28 +13,21 @@ DB_PATH = os.path.join(REPO_DIR, "stocks.db")  # 即 ./stocks.db
 REPO_URL = f"https://{st.secrets['TOKEN']}@github.com/KellifizW/Q-MagV1.git"
 nasdaq = mcal.get_calendar('NASDAQ')
 
-def clone_repo():
+def init_repo():
     try:
-        if os.path.exists(REPO_DIR):
-            for item in os.listdir(REPO_DIR):
-                if item not in ['app.py', 'requirements.txt', '.streamlit', 'database.py', 'screening.py', 'visualize.py']:
-                    path = os.path.join(REPO_DIR, item)
-                    if os.path.isdir(path):
-                        shutil.rmtree(path)
-                    else:
-                        os.remove(path)
-        repo = git.Repo.clone_from(REPO_URL, REPO_DIR)
+        # 初始化現有的 Git 倉庫，而不是重新克隆
+        repo = git.Repo(REPO_DIR)
         with repo.config_writer() as git_config:
             git_config.set_value('credential', 'helper', 'store --file=.git-credentials')
         with open('.git-credentials', 'w') as f:
             f.write(f"https://{st.secrets['TOKEN']}:@github.com")
-        st.write("倉庫克隆成功並配置憑證")
+        st.write("成功初始化現有 Git 倉庫")
         return repo
     except KeyError:
         st.error("未找到 TOKEN 秘密，請在 Streamlit Cloud 的 Secrets 中配置")
         return None
     except Exception as e:
-        st.error(f"克隆倉庫失敗：{str(e)}")
+        st.error(f"初始化 Git 倉庫失敗：{str(e)}")
         return None
 
 def push_to_github(repo, message="Update stocks.db"):
@@ -187,7 +179,7 @@ def fetch_stock_data(tickers, stock_pool=None, db_path=DB_PATH, trading_days=70)
     if stock_pool == "S&P 500":
         from screening import get_sp500
         tickers_sp500 = get_sp500()
-        repo = clone_repo()
+        repo = init_repo()
         if repo and extend_sp500(tickers_sp500, repo=repo):
             st.write("S&P 500 股票補充完成，更新資料庫...")
     
