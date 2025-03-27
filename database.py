@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 REPO_DIR = "."
 DB_PATH = os.path.join(REPO_DIR, "stocks.db")
 nasdaq = mcal.get_calendar('NASDAQ')
+REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 
 def init_repo():
     """初始化 Git 倉庫，使用 st.secrets 獲取 GitHub Token"""
@@ -32,7 +33,7 @@ def init_repo():
         # 從 st.secrets 獲取 GitHub Token
         if "github_token" not in st.secrets:
             logger.error("st.secrets 中未找到 github_token，請在 Streamlit 設定中配置")
-            st.error("未找到 GitHub Token，請在 Streamlit 設定中配置")
+            st.error("未找到 GitHub Token，請在 Streamlit 設定中配置 'github_token'")
             return None
         token = st.secrets["github_token"]
 
@@ -68,7 +69,7 @@ def push_to_github(repo, message="Update stocks.db"):
         
         # 添加並提交變更
         subprocess.run(['git', 'add', 'stocks.db'], check=True, capture_output=True, text=True)
-        subprocess.run(['git', 'add', 'tickers.csv'], check=True, capture_output=True, text=True)  # 參考舊版
+        subprocess.run(['git', 'add', 'tickers.csv'], check=True, capture_output=True, text=True)
         subprocess.run(['git', 'commit', '-m', message], check=True, capture_output=True, text=True)
         
         # 使用 st.secrets 中的 Token 推送
@@ -155,7 +156,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
             all_data = []
             for ticker in tickers_in_batch:
                 ticker_cols = [col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']
-                ticker_df = df[ticker_cols].copy()
+                ticker的基本 = df[ticker_cols].copy()
                 ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
                 ticker_df['Ticker'] = ticker
                 all_data.append(ticker_df)
