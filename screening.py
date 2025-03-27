@@ -3,7 +3,7 @@ import streamlit as st
 from database import fetch_stock_data
 
 def get_nasdaq_100(csv_tickers):
-    """從 tickers.csv 過濾 NASDAQ 100 股票"""
+    """從 csv_tickers 過濾 NASDAQ 100 股票"""
     try:
         tables = pd.read_html('https://en.wikipedia.org/wiki/Nasdaq-100')
         df = tables[4]
@@ -24,11 +24,11 @@ def get_sp500():
         return ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA']
 
 def get_nasdaq_all(csv_tickers):
-    """直接使用 tickers.csv 的股票，不擴展"""
+    """直接使用 csv_tickers，不擴展"""
     return csv_tickers
 
 def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5):
-    """批量分析股票數據"""
+    """批量分析股票數據，返回符合條件的結果"""
     results = []
     failed_stocks = {}
     required_days = prior_days + consol_days + 30
@@ -92,7 +92,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     return pd.concat(results) if results else pd.DataFrame()
 
 def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5, progress_bar=None):
-    """主篩選函數"""
+    """主篩選函數，從 SQLite 查詢數據"""
     data = fetch_stock_data(tickers, stock_pool)
     if data is None:
         st.error("無法從資料庫獲取數據")
