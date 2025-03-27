@@ -30,12 +30,15 @@ def init_repo():
             subprocess.run(['git', 'init'], check=True, capture_output=True, text=True)
             logger.info("初始化 Git 倉庫")
 
-        # 從 st.secrets 獲取 GitHub Token
+        # 調試：檢查 st.secrets 是否包含 github_token
+        st.write("調試：檢查 st.secrets 內容")
+        st.write(f"st.secrets 可用鍵：{list(st.secrets.keys())}")
         if "github_token" not in st.secrets:
-            logger.error("st.secrets 中未找到 github_token，請在 Streamlit 設定中配置")
-            st.error("未找到 GitHub Token，請在 Streamlit 設定中配置 'github_token'")
+            logger.error("st.secrets 中未找到 github_token")
+            st.error("未找到 'github_token'，請在 Streamlit Cloud 的 Secrets 中配置為：github_token = \"your_token\"")
             return None
         token = st.secrets["github_token"]
+        st.write("成功從 st.secrets 獲取 github_token")
 
         # 配置遠端倉庫
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
@@ -49,7 +52,7 @@ def init_repo():
         
         logger.info("Git 倉庫初始化完成")
         st.write("成功初始化 Git 倉庫")
-        return True  # 與 app.py 兼容，返回布林值
+        return True
     except Exception as e:
         logger.error(f"Git 倉庫初始化失敗：{str(e)}")
         st.error(f"初始化 Git 倉庫失敗：{str(e)}")
@@ -75,9 +78,11 @@ def push_to_github(repo, message="Update stocks.db"):
         # 使用 st.secrets 中的 Token 推送
         if "github_token" not in st.secrets:
             logger.error("st.secrets 中未找到 github_token")
-            st.error("未找到 GitHub Token，無法推送")
+            st.error("未找到 'github_token'，請在 Streamlit Cloud 的 Secrets 中配置為：github_token = \"your_token\"")
             return False
         token = st.secrets["github_token"]
+        st.write("成功從 st.secrets 獲取 github_token 用於推送")
+        
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
         subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
@@ -156,7 +161,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
             all_data = []
             for ticker in tickers_in_batch:
                 ticker_cols = [col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']
-                ticker的基本 = df[ticker_cols].copy()
+                ticker_df = df[ticker_cols].copy()
                 ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
                 ticker_df['Ticker'] = ticker
                 all_data.append(ticker_df)
@@ -200,7 +205,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
     """更新資料庫"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
-        st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
+        st.error("未提供 Git 倉庫物件， compléter至 GitHub")
         return False
 
     try:
