@@ -1,6 +1,5 @@
 streamlit
 pandas
-sqlite3
 yfinance
 pandas_market_calendars
 plotly
