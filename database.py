@@ -11,7 +11,7 @@ import time
 
 REPO_DIR = "repo"
 DB_PATH = os.path.join(REPO_DIR, "stocks.db")
-REPO_URL = f"https://{st.secrets['TOKEN']}@github.com/KellifizW/Q-MagV1.git"  # 替換 YOUR_USERNAME
+REPO_URL = f"https://{st.secrets['TOKEN']}@github.com/KellifizW/Q-MagV1.git"
 nasdaq = mcal.get_calendar('NASDAQ')
 
 def clone_repo():
@@ -32,26 +32,37 @@ def push_to_github(repo, message="Update stocks.db"):
     repo.git.commit(m=message)
     repo.git.push()
 
+def download_with_retry(tickers, start, end, retries=3, delay=5):
+    """帶重試機制的批量下載函數"""
+    for attempt in range(retries):
+        try:
+            data = yf.download(tickers, start=start, end=end, group_by="ticker", progress=False, threads=True)
+            if not data.empty:
+                return data
+            else:
+                st.write(f"批次數據為空，重試 {attempt + 1}/{retries}")
+        except Exception as e:
+            st.write(f"下載失敗: {e}，重試 {attempt + 1}/{retries}")
+            time.sleep(delay * (attempt + 1))  # 指數增長延遲
+    st.error(f"下載 {tickers} 失敗，已達最大重試次數")
+    return pd.DataFrame()  # 返回空 DataFrame 表示失敗
+
 def initialize_database(tickers, db_path=DB_PATH, batch_size=50):
     conn = sqlite3.connect(db_path)
     end_date = datetime.now().date()
     start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
     
-    # 分批處理
     for i in range(0, len(tickers), batch_size):
         batch_tickers = tickers[i:i + batch_size]
         st.write(f"初始化：下載批次 {i//batch_size + 1}/{len(tickers)//batch_size + 1} ({len(batch_tickers)} 檔股票)...")
-        try:
-            data = yf.download(batch_tickers, start=start_date, end=end_date, group_by="ticker", progress=False)
-            if not data.empty:
-                if len(batch_tickers) == 1:  # 單一股票時調整結構
-                    data = pd.DataFrame(data).assign(Ticker=batch_tickers[0])
-                else:  # 多股票時轉換格式
-                    data = data.stack(level=1).reset_index().rename(columns={'level_1': 'Ticker'})
-                data.to_sql('stocks', conn, if_exists='append', index=True, index_label='Date')
-            time.sleep(1)  # 避免速率限制
-        except Exception as e:
-            st.write(f"批次 {i//batch_size + 1} 下載失敗: {e}")
+        data = download_with_retry(batch_tickers, start=start_date, end=end_date)
+        if not data.empty:
+            if len(batch_tickers) == 1:  # 單一股票
+                data = pd.DataFrame(data).assign(Ticker=batch_tickers[0])
+            else:  # 多股票
+                data = data.stack(level=1, future_stack=True).reset_index().rename(columns={'level_1': 'Ticker'})
+            data.to_sql('stocks', conn, if_exists='append', index=True, index_label='Date')
+        time.sleep(2)  # 增加延遲以避免速率限制
     
     pd.DataFrame({'last_updated': [end_date.strftime('%Y-%m-%d')]}).to_sql('metadata', conn, if_exists='replace', index=False)
     conn.close()
@@ -72,17 +83,14 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50):
     for i in range(0, len(tickers), batch_size):
         batch_tickers = tickers[i:i + batch_size]
         st.write(f"更新：下載批次 {i//batch_size + 1}/{len(tickers)//batch_size + 1} ({len(batch_tickers)} 檔股票)...")
-        try:
-            data = yf.download(batch_tickers, start=start_date, end=current_date, group_by="ticker", progress=False)
-            if not data.empty:
-                if len(batch_tickers) == 1:
-                    data = pd.DataFrame(data).assign(Ticker=batch_tickers[0])
-                else:
-                    data = data.stack(level=1).reset_index().rename(columns={'level_1': 'Ticker'})
-                data.to_sql('stocks', conn, if_exists='append', index=True, index_label='Date')
-            time.sleep(1)  # 避免速率限制
-        except Exception as e:
-            st.write(f"批次 {i//batch_size + 1} 更新失敗: {e}")
+        data = download_with_retry(batch_tickers, start=start_date, end=current_date)
+        if not data.empty:
+            if len(batch_tickers) == 1:
+                data = pd.DataFrame(data).assign(Ticker=batch_tickers[0])
+            else:
+                data = data.stack(level=1, future_stack=True).reset_index().rename(columns={'level_1': 'Ticker'})
+            data.to_sql('stocks', conn, if_exists='append', index=True, index_label='Date')
+        time.sleep(2)  # 增加延遲
     
     pd.DataFrame({'last_updated': [current_date.strftime('%Y-%m-%d')]}).to_sql('metadata', conn, if_exists='replace', index=False)
     conn.close()
@@ -101,17 +109,14 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=50):
         for i in range(0, len(missing_tickers), batch_size):
             batch_tickers = missing_tickers[i:i + batch_size]
             st.write(f"補充 S&P 500：下載批次 {i//batch_size + 1}/{len(missing_tickers)//batch_size + 1} ({len(batch_tickers)} 檔股票)...")
-            try:
-                data = yf.download(batch_tickers, start=start_date, end=end_date, group_by="ticker", progress=False)
-                if not data.empty:
-                    if len(batch_tickers) == 1:
-                        data = pd.DataFrame(data).assign(Ticker=batch_tickers[0])
-                    else:
-                        data = data.stack(level=1).reset_index().rename(columns={'level_1': 'Ticker'})
-                    data.to_sql('stocks', conn, if_exists='append', index=True, index_label='Date')
-                time.sleep(1)  # 避免速率限制
-            except Exception as e:
-                st.write(f"批次 {i//batch_size + 1} 補充失敗: {e}")
+            data = download_with_retry(batch_tickers, start=start_date, end=end_date)
+            if not data.empty:
+                if len(batch_tickers) == 1:
+                    data = pd.DataFrame(data).assign(Ticker=batch_tickers[0])
+                else:
+                    data = data.stack(level=1, future_stack=True).reset_index().rename(columns={'level_1': 'Ticker'})
+                data.to_sql('stocks', conn, if_exists='append', index=True, index_label='Date')
+            time.sleep(2)  # 增加延遲
     
     conn.close()
     return len(missing_tickers) > 0
