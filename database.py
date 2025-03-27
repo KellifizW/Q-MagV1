@@ -9,22 +9,30 @@ import shutil
 import streamlit as st
 import time
 
-REPO_DIR = "repo"
-DB_PATH = os.path.join(REPO_DIR, "stocks.db")
+# 配置路徑和參數
+REPO_DIR = "."  # Streamlit Cloud 中，倉庫克隆到應用根目錄
+DB_PATH = os.path.join(REPO_DIR, "stocks.db")  # 即 ./stocks.db
 REPO_URL = f"https://{st.secrets['TOKEN']}@github.com/KellifizW/Q-MagV1.git"
 nasdaq = mcal.get_calendar('NASDAQ')
 
 def clone_repo():
     try:
         if os.path.exists(REPO_DIR):
-            shutil.rmtree(REPO_DIR)
+            # 清空當前目錄下的舊倉庫檔案，但保留 Streamlit 的必要檔案（如 app.py）
+            for item in os.listdir(REPO_DIR):
+                if item not in ['app.py', 'requirements.txt', '.streamlit', 'stocks.db', 'tickers.csv']:
+                    path = os.path.join(REPO_DIR, item)
+                    if os.path.isdir(path):
+                        shutil.rmtree(path)
+                    else:
+                        os.remove(path)
         repo = git.Repo.clone_from(REPO_URL, REPO_DIR)
         # 配置憑證助手
         with repo.config_writer() as git_config:
-            git_config.set_value('credential', 'helper', 'store --file=/tmp/git-credentials')
-        with open('/tmp/git-credentials', 'w') as f:
+            git_config.set_value('credential', 'helper', 'store --file=.git-credentials')
+        with open('.git-credentials', 'w') as f:
             f.write(f"https://{st.secrets['TOKEN']}:@github.com")
-        print("倉庫克隆成功並配置憑證")
+        st.write("倉庫克隆成功並配置憑證")
         return repo
     except KeyError:
         st.error("未找到 TOKEN 秘密，請在 Streamlit Cloud 的 Secrets 中配置")
@@ -135,8 +143,12 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
 
     conn = sqlite3.connect(db_path)
     current_date = datetime.now().date()
-    last_updated = pd.read_sql_query("SELECT last_updated FROM metadata", conn).iloc[0, 0]
-    last_updated_date = datetime.strptime(last_updated, '%Y-%m-%d').date()
+    try:
+        last_updated = pd.read_sql_query("SELECT last_updated FROM metadata", conn).iloc[0, 0]
+        last_updated_date = datetime.strptime(last_updated, '%Y-%m-%d').date()
+    except Exception:
+        st.write("無法讀取上次更新日期，假設需要初始化")
+        last_updated_date = current_date - timedelta(days=1)
     
     schedule = nasdaq.schedule(start_date=last_updated_date, end_date=current_date)
     if len(schedule) <= 1:
@@ -252,12 +264,12 @@ def fetch_stock_data(tickers, stock_pool=None, db_path=DB_PATH, trading_days=70)
     conn.close()
     
     if data.empty and stock_pool != "S&P 500":
+        st.error("資料庫中無符合條件的數據，請檢查初始化是否成功")
         return None
     return data.pivot(columns='Ticker')
 
 # 示例 app.py 使用方式
 if __name__ == "__main__":
-    import streamlit as st
     csv_tickers = ["AAPL", "MSFT", "GOOGL"] * 50  # 示例：150 個股票
     if 'initialized' not in st.session_state:
         st.session_state['initialized'] = False
