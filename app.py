@@ -6,6 +6,25 @@ from database import init_repo, push_to_github, initialize_database, update_data
 import os
 from datetime import datetime
 
+DB_PATH = "./stocks.db"
+
+if os.path.exists(DB_PATH):
+    st.write(f"找到 stocks.db，檔案大小：{os.path.getsize(DB_PATH)} bytes")
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = cursor.fetchall()
+    st.write("資料庫中的表：", tables)
+    if tables:
+        for table in tables:
+            table_name = table[0]
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            row_count = cursor.fetchone()[0]
+            st.write(f"表 {table_name} 中的記錄數：{row_count}")
+    conn.close()
+else:
+    st.error("stocks.db 不存在！")
+
 st.title("Qullamaggie Breakout Screener")
 
 # 配置
