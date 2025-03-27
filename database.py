@@ -96,7 +96,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
     for i in range(0, len(tickers), batch_size):
         batch_tickers = tickers[i:i + batch_size]
         batch_count += 1
-        st.write(f"初始化：下載批次 {batch_count}/{total_batches} ({len(batch_tickers)} 檔股票)...")
+        st.write(f"初始化：下載批次 {batch_count}/{total_batches} ({len(batch_tickers)} 檔股票): {batch_tickers}")
         data = download_with_retry(batch_tickers, start=start_date, end=end_date)
         if not data.empty:
             if len(batch_tickers) == 1:
@@ -107,19 +107,23 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
             data.columns = [col.replace('Adj Close', 'Adj_Close') for col in data.columns]
             expected_columns = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Adj_Close', 'Volume']
             data = data[[col for col in expected_columns if col in data.columns]]
+            st.write(f"批次 {batch_count} 下載成功，數據筆數: {len(data)}")
             data.to_sql('stocks', conn, if_exists='append', index=False)
+        else:
+            st.warning(f"批次 {batch_count} 無數據，下載的股票: {batch_tickers}")
         
         if batch_count % 10 == 0 or batch_count == total_batches:
             conn.commit()
+            st.write(f"批次 {batch_count} 已提交至資料庫")
             push_to_github(repo, f"Initialized {batch_count} batches of stock data")
         
         time.sleep(2)
     
     pd.DataFrame({'last_updated': [end_date.strftime('%Y-%m-%d')]}).to_sql('metadata', conn, if_exists='replace', index=False)
     conn.commit()
-    if batch_count % 10 != 0:
-        push_to_github(repo, "Final initialization of stocks.db")
+    push_to_github(repo, "Final initialization of stocks.db")
     conn.close()
+    st.write("資料庫初始化完成")
 
 def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
     if repo is None:
@@ -148,7 +152,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
     for i in range(0, len(tickers), batch_size):
         batch_tickers = tickers[i:i + batch_size]
         batch_count += 1
-        st.write(f"更新：下載批次 {batch_count}/{total_batches} ({len(batch_tickers)} 檔股票)...")
+        st.write(f"更新：下載批次 {batch_count}/{total_batches} ({len(batch_tickers)} 檔股票): {batch_tickers}")
         data = download_with_retry(batch_tickers, start=start_date, end=current_date)
         if not data.empty:
             if len(batch_tickers) == 1:
@@ -159,19 +163,23 @@ def update_database(tickers, db_path=DB_PATH, batch_size=50, repo=None):
             data.columns = [col.replace('Adj Close', 'Adj_Close') for col in data.columns]
             expected_columns = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Adj_Close', 'Volume']
             data = data[[col for col in expected_columns if col in data.columns]]
+            st.write(f"批次 {batch_count} 下載成功，數據筆數: {len(data)}")
             data.to_sql('stocks', conn, if_exists='append', index=False)
+        else:
+            st.warning(f"批次 {batch_count} 無數據，下載的股票: {batch_tickers}")
         
         if batch_count % 10 == 0 or batch_count == total_batches:
             conn.commit()
+            st.write(f"批次 {batch_count} 已提交至資料庫")
             push_to_github(repo, f"Updated {batch_count} batches of stock data")
         
         time.sleep(2)
     
     pd.DataFrame({'last_updated': [current_date.strftime('%Y-%m-%d')]}).to_sql('metadata', conn, if_exists='replace', index=False)
     conn.commit()
-    if batch_count % 10 != 0:
-        push_to_github(repo, "Final update of stocks.db")
+    push_to_github(repo, "Final update of stocks.db")
     conn.close()
+    st.write("資料庫更新完成")
     return True
 
 def fetch_stock_data(tickers, stock_pool=None, db_path=DB_PATH, trading_days=70):
