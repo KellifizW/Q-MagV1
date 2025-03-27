@@ -9,20 +9,23 @@ import shutil
 import streamlit as st
 import time
 
-# 配置
 REPO_DIR = "repo"
 DB_PATH = os.path.join(REPO_DIR, "stocks.db")
-TOKEN = os.environ.get("TOKEN")
-REPO_URL = f"https://{TOKEN}@github.com/KellifizW/Q-MagV1.git"  # 替換 YOUR_USERNAME
+REPO_URL = f"https://{st.secrets['TOKEN']}@github.com/YOUR_USERNAME/stock-screening.git"  # 替換 YOUR_USERNAME
 nasdaq = mcal.get_calendar('NASDAQ')
 
 def clone_repo():
-    if not TOKEN:
-        raise ValueError("環境變數 TOKEN 未設置，請在 Streamlit Cloud 中配置")
-    if os.path.exists(REPO_DIR):
-        shutil.rmtree(REPO_DIR)
-    repo = git.Repo.clone_from(REPO_URL, REPO_DIR)
-    return repo
+    try:
+        if os.path.exists(REPO_DIR):
+            shutil.rmtree(REPO_DIR)
+        repo = git.Repo.clone_from(REPO_URL, REPO_DIR)
+        return repo
+    except KeyError:
+        st.error("未找到 TOKEN 秘密，請在 Streamlit Cloud 的 Secrets 中配置")
+        return None
+    except Exception as e:
+        st.error(f"克隆倉庫失敗：{str(e)}")
+        return None
 
 def push_to_github(repo, message="Update stocks.db"):
     repo.git.add("stocks.db")
