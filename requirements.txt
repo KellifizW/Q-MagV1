@@ -1,6 +1,7 @@
 streamlit
 pandas
-pandas_market_calendars
+sqlite3
 yfinance
+pandas_market_calendars
 plotly
-lxml
+pygit2
