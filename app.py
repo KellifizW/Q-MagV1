@@ -9,8 +9,8 @@ from datetime import datetime
 st.title("Qullamaggie Breakout Screener")
 
 # 配置
-REPO_DIR = "Q-MagV1"
-DB_PATH = os.path.join(REPO_DIR, "stocks.db")
+REPO_DIR = "."  # Streamlit Cloud 中，檔案位於應用根目錄
+DB_PATH = os.path.join(REPO_DIR, "stocks.db")  # 即 ./stocks.db
 
 # 簡介與參考
 st.markdown("""
@@ -40,16 +40,24 @@ st.markdown("""
 
 # 初始化資料庫和 GitHub
 repo = clone_repo()
-tickers_df = pd.read_csv(os.path.join(REPO_DIR, "tickers.csv"))
-csv_tickers = tickers_df['Ticker'].tolist()
+if repo is None:
+    st.error("無法克隆 GitHub 倉庫，請檢查 TOKEN 配置或網路連線")
+    st.stop()
+
+try:
+    tickers_df = pd.read_csv("tickers.csv")  # 直接讀取根目錄下的 tickers.csv
+    csv_tickers = tickers_df['Ticker'].tolist()
+except FileNotFoundError:
+    st.error("找不到 tickers.csv，請確保該檔案已上傳至 GitHub 倉庫根目錄")
+    st.stop()
 
 if not os.path.exists(DB_PATH):
     st.write("初始化資料庫...")
-    initialize_database(csv_tickers)
+    initialize_database(csv_tickers, repo=repo)  # 傳遞 repo 參數
     push_to_github(repo, "Initial stocks.db creation")
 else:
     st.write("更新資料庫...")
-    if update_database(csv_tickers):
+    if update_database(csv_tickers, repo=repo):  # 傳遞 repo 參數
         push_to_github(repo, f"Daily update: {datetime.now().strftime('%Y-%m-%d')}")
 
 # 用戶輸入參數
