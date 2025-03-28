@@ -37,8 +37,7 @@ def check_readonly(db_path):
         if not os.path.exists(db_path):
             st.write(f"{db_path} 不存在，將創建新檔案")
             logger.info(f"{db_path} 不存在")
-            return False  # 新檔案不會是唯讀
-        # 嘗試以寫入模式打開
+            return False
         with sqlite3.connect(db_path) as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS temp_test (id INTEGER)")
             conn.execute("DROP TABLE temp_test")
@@ -59,10 +58,10 @@ def ensure_writable(db_path):
     """確保資料庫檔案可寫"""
     try:
         if os.path.exists(db_path):
-            os.chmod(db_path, 0o666)  # 設置為可讀寫
+            os.chmod(db_path, 0o666)
             logger.info(f"已確保 {db_path} 可寫")
         else:
-            open(db_path, 'a').close()  # 創建空檔案
+            open(db_path, 'a').close()
             os.chmod(db_path, 0o666)
             logger.info(f"創建並設置 {db_path} 為可寫")
     except Exception as e:
@@ -126,7 +125,7 @@ def push_to_github(repo, message="Update stocks.db"):
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
         push_result = subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
         logger.info(f"推送成功 - stdout: {push_result.stdout}, stderr: {push_result.stderr}")
-        st.write(f"已推送至 GitHub: {message}")
+        st.success(f"已成功推送至 GitHub: {message}")
         return True
     except subprocess.CalledProcessError as e:
         logger.error(f"Git 操作失敗 - 命令：{e.cmd}, stdout: {e.stdout}, stderr: {e.stderr}")
@@ -163,7 +162,7 @@ def get_github_file_info():
         
         if response.status_code == 200:
             data = response.json()
-            size = data.get("size", 0) / 1024  # 轉換為 KB
+            size = data.get("size", 0) / 1024
             last_updated = data.get("sha", "未知")
             return {"size_kb": size, "last_updated": last_updated}
         else:
@@ -190,7 +189,7 @@ def get_nasdaq_all(csv_tickers=TICKERS_CSV):
         return []
 
 def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None):
-    """增量更新資料庫，從最後一個股票倒序檢查 10%，檢查唯讀狀態"""
+    """增量更新資料庫，顯示推送狀態"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件")
         st.error("未提供 Git 倉庫物件")
@@ -202,7 +201,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         if is_readonly:
             st.error("資料庫為唯讀，無法更新")
             return False
-        ensure_writable(db_path)  # 確保可寫
+        ensure_writable(db_path)
 
         # 讀取股票清單
         if not os.path.exists(tickers_file):
@@ -290,7 +289,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                     ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
                     ticker_df['Ticker'] = ticker
                     if ticker in existing_tickers:
-                        ticker_df = ticker_df[pd.to_datetime(ticker_df['Date']).dt.date > existing_tickers[ticker]]  # 轉為 date 比較
+                        ticker_df = ticker_df[pd.to_datetime(ticker_df['Date']).dt.date > existing_tickers[ticker]]
                     all_data.append(ticker_df)
 
                 if not all_data:
@@ -324,8 +323,9 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         # 顯示更新結果
         if rows_inserted_total > 0:
             st.write(f"更新完成，插入 {rows_inserted_total} 行新數據")
+            st.write("請手動推送至 GitHub 以保存變更")
         else:
-            st.write("更新完成，無新數據插入")
+            st.write("更新完成，無新數據插入，無需推送")
 
         # 提供下載按鈕
         if os.path.exists(DB_PATH):
@@ -339,13 +339,11 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         else:
             st.error("stocks.db 不存在，無法提供下載")
 
-        # 提供手動推送按鈕
+        # 提供手動推送按鈕並顯示結果
         if st.button("推送至 GitHub"):
             push_success = push_to_github(repo, f"Manual push: Updated stocks.db with {rows_inserted_total} new rows (10% test)")
-            if push_success:
-                st.success("手動推送成功")
-            else:
-                st.error("手動推送失敗")
+            if not push_success:
+                st.error("推送失敗，請檢查日誌或網路連線")
 
         # 查詢並顯示 GitHub 上的檔案資訊
         github_info = get_github_file_info()
@@ -375,10 +373,8 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 )
         if st.button("推送至 GitHub（異常後）"):
             push_success = push_to_github(repo, "Manual push after error")
-            if push_success:
-                st.success("手動推送成功")
-            else:
-                st.error("手動推送失敗")
+            if not push_success:
+                st.error("推送失敗，請檢查日誌或網路連線")
         github_info = get_github_file_info()
         if github_info:
             st.write(f"GitHub 上 stocks.db 資訊：")
