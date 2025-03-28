@@ -86,7 +86,11 @@ if submit_button:
     else:
         tickers = get_nasdaq_all(csv_tickers="Tickers.csv")[:max_stocks]
     st.session_state['tickers'] = tickers
-    
+
+    # 檢查資料庫是否存在
+    if not os.path.exists("stocks.db"):
+        st.error("資料庫 stocks.db 不存在，請先點擊「初始化並更新資料庫」或「更新資料庫」")
+   
     # 篩選邏輯
     with st.spinner("篩選中..."):
         progress_bar = st.progress(0)
