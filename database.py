@@ -22,13 +22,12 @@ US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 20
 
 def download_with_retry(tickers, start, end, retries=2, delay=5):
-    """簡化版帶重試的股票數據下載，移除多線程"""
     for attempt in range(retries):
         try:
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
                 logger.warning(f"批次數據為空，股票：{tickers}")
-                continue
+                return None
             logger.info(f"成功下載 {len(tickers)} 檔股票數據")
             return data
         except Exception as e:
