@@ -72,9 +72,9 @@ if submit_button:
     
     # 更新 tickers
     if index_option == "NASDAQ 100":
-        tickers = get_nasdaq_100()
+        tickers = get_nasdaq_100(csv_tickers="Tickers.csv")
     elif index_option == "S&P 500":
-        tickers = get_sp500()
+        tickers = get_sp500(csv_tickers="Tickers.csv")
     else:
         tickers = get_nasdaq_all(csv_tickers="Tickers.csv")[:max_stocks]
     st.session_state['tickers'] = tickers
