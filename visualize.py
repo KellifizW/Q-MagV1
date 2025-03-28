@@ -14,8 +14,12 @@ def plot_top_5_stocks(top_5_tickers):
         
         # 優先使用批量數據
         if stock_data_batch is not None and ticker in stock_data_batch.columns.get_level_values(1):
-            stock_data = stock_data_batch[ticker]
-            error = None
+            try:
+                stock_data = stock_data_batch.xs(ticker, level='Ticker', axis=1)
+                error = None
+            except KeyError as e:
+                stock_data = None
+                error = f"無法從批量數據中提取 {ticker}：{str(e)}"
         else:
             stock_data, error = fetch_stock_data(ticker, trading_days=70)
         
@@ -100,8 +104,12 @@ def plot_breakout_stocks(breakout_tickers, consol_days):
         st.write(f"正在處理突破股票 {ticker}...")
         
         if stock_data_batch is not None and ticker in stock_data_batch.columns.get_level_values(1):
-            stock_data = stock_data_batch[ticker]
-            error = None
+            try:
+                stock_data = stock_data_batch.xs(ticker, level='Ticker', axis=1)
+                error = None
+            except KeyError as e:
+                stock_data = None
+                error = f"無法從批量數據中提取 {ticker}：{str(e)}"
         else:
             stock_data, error = fetch_stock_data(ticker, trading_days=70)
         
