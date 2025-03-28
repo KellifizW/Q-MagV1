@@ -226,7 +226,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 for ticker in batch_tickers
             ]
             start_date = min(batch_start_dates)
-            data = download_with_retry(batch_tickers, start=start_date, end=end_date)
+            data = download_with_retry(batch_tickers, start=start_date, end=end_date, api_key=api_key)
             if data is None:
                 continue
 
