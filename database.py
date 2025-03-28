@@ -71,39 +71,57 @@ def init_repo():
         return None
 
 def push_to_github(repo, message="Update stocks.db"):
-    """推送變更到 GitHub"""
+    """推送變更到 GitHub，添加詳細除錯訊息"""
     try:
         os.chdir(REPO_DIR)
+        # 檢查倉庫狀態
         status = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True)
+        logger.info(f"Git status 輸出：{status.stdout}")
+        st.write(f"調試：Git status 輸出：{status.stdout}")
         if not status.stdout.strip():
             logger.info("沒有需要提交的變更")
             st.write("沒有變更需要推送")
             return True
         
-        subprocess.run(['git', 'add', 'stocks.db'], check=True, capture_output=True, text=True)
-        subprocess.run(['git', 'commit', '-m', message], check=True, capture_output=True, text=True)
+        # 添加檔案
+        add_result = subprocess.run(['git', 'add', 'stocks.db'], check=True, capture_output=True, text=True)
+        logger.info(f"Git add 結果 - stdout: {add_result.stdout}, stderr: {add_result.stderr}")
+        st.write(f"調試：Git add 結果 - stdout: {add_result.stdout}, stderr: {add_result.stderr}")
         
+        # 提交變更
+        commit_result = subprocess.run(['git', 'commit', '-m', message], check=True, capture_output=True, text=True)
+        logger.info(f"Git commit 結果 - stdout: {commit_result.stdout}, stderr: {commit_result.stderr}")
+        st.write(f"調試：Git commit 結果 - stdout: {commit_result.stdout}, stderr: {commit_result.stderr}")
+        
+        # 檢查 TOKEN
         if "TOKEN" not in st.secrets:
             logger.error("st.secrets 中未找到 TOKEN")
             st.error("未找到 'TOKEN'，請在 Streamlit Cloud 的 Secrets 中配置為：TOKEN = \"your_token\"")
             return False
         token = st.secrets["TOKEN"]
+        logger.info("成功從 st.secrets 獲取 TOKEN 用於推送")
         st.write("成功從 st.secrets 獲取 TOKEN 用於推送")
         
+        # 推送至遠端
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
-        subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
+        logger.info(f"推送至遠端：{remote_url}，分支：{branch}")
+        st.write(f"調試：推送至遠端：{remote_url}，分支：{branch}")
+        
+        push_result = subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
+        logger.info(f"Git push 結果 - stdout: {push_result.stdout}, stderr: {push_result.stderr}")
+        st.write(f"調試：Git push 結果 - stdout: {push_result.stdout}, stderr: {push_result.stderr}")
         
         logger.info(f"成功推送至 GitHub，提交訊息：{message}")
         st.write(f"已推送至 GitHub: {message}")
         return True
     except subprocess.CalledProcessError as e:
-        logger.error(f"Git 推送失敗：{e.stderr}")
-        st.error(f"推送至 GitHub 失敗: {e.stderr}")
+        logger.error(f"Git 操作失敗 - 命令：{e.cmd}, stdout: {e.stdout}, stderr: {e.stderr}")
+        st.error(f"推送至 GitHub 失敗 - 命令：{e.cmd}, stdout: {e.stdout}, stderr: {e.stderr}")
         return False
     except Exception as e:
         logger.error(f"Git 推送發生未知錯誤：{str(e)}")
-        st.error(f"推送至 GitHub 發生未知錯誤: {e}")
+        st.error(f"推送至 GitHub 發生未知錯誤: {str(e)}")
         return False
 
 def download_with_retry(tickers, start, end, retries=5, delay=10):
