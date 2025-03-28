@@ -41,7 +41,7 @@ def plot_top_5_stocks(top_5_tickers):
                 st.error(f"清理後 {ticker} 的數據長度 {len(stock_data)} 小於最小要求 10")
                 continue
             
-            dates = stock_data.index.tolist()
+            dates = stock_data.index.tolist()  # 直接使用字串索引
             prices = stock_data["Close"].astype(float).tolist()
             volumes = stock_data["Volume"].astype(int).tolist()
             
@@ -79,14 +79,8 @@ def plot_top_5_stocks(top_5_tickers):
                                  hovertemplate="日期: %{customdata}<br>MACD 柱狀圖: %{y:.2f}", customdata=dates),
                           row=2, col=1)
             
-            # 優化圖表大小
-            fig.update_layout(
-                title=f"{ticker} 近 3 個月走勢與 MACD",
-                xaxis_title="日期",
-                showlegend=True,
-                autosize=True,  # 啟用自動調整大小
-                margin=dict(b=100)
-            )
+            fig.update_layout(title=f"{ticker} 近 3 個月走勢與 MACD", xaxis_title="日期", showlegend=True, height=800,
+                              margin=dict(b=100))
             fig.update_yaxes(title_text="價格", row=1, col=1, secondary_y=False)
             fig.update_yaxes(title_text="成交量", row=1, col=1, secondary_y=True)
             fig.update_yaxes(title_text="MACD", row=2, col=1)
@@ -96,8 +90,7 @@ def plot_top_5_stocks(top_5_tickers):
             fig.update_xaxes(tickvals=tickvals, ticktext=ticktext, tickangle=45, tickfont=dict(size=10), row=1, col=1)
             fig.update_xaxes(tickvals=tickvals, ticktext=ticktext, tickangle=45, tickfont=dict(size=10), row=2, col=1)
             
-            # 使用容器寬度適配螢幕
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig)
             st.write(f"成功繪製 {ticker} 的圖表")
         except Exception as e:
             st.error(f"繪製 {ticker} 的圖表時發生錯誤：{str(e)}")
@@ -133,7 +126,7 @@ def plot_breakout_stocks(breakout_tickers, consol_days):
             recent_high = stock_data['Close'][-consol_days-1:-1].max()
             recent_low = stock_data['Close'][-consol_days-1:-1].min()
             
-            dates = stock_data.index.tolist()
+            dates = stock_data.index.tolist()  # 直接使用字串索引
             prices = stock_data["Close"].astype(float).tolist()
             volumes = stock_data["Volume"].astype(int).tolist()
             
@@ -173,14 +166,8 @@ def plot_breakout_stocks(breakout_tickers, consol_days):
                                  hovertemplate="日期: %{customdata}<br>MACD 柱狀圖: %{y:.2f}", customdata=dates),
                           row=2, col=1)
             
-            # 優化圖表大小
-            fig.update_layout(
-                title=f"{ticker} 突破圖表（買入信號）與 MACD",
-                xaxis_title="日期",
-                showlegend=True,
-                autosize=True,  # 啟用自動調整大小
-                margin=dict(b=100)
-            )
+            fig.update_layout(title=f"{ticker} 突破圖表（買入信號）與 MACD", xaxis_title="日期", showlegend=True, height=800,
+                              margin=dict(b=100))
             fig.update_yaxes(title_text="價格", row=1, col=1, secondary_y=False)
             fig.update_yaxes(title_text="成交量", row=1, col=1, secondary_y=True)
             fig.update_yaxes(title_text="MACD", row=2, col=1)
@@ -190,8 +177,7 @@ def plot_breakout_stocks(breakout_tickers, consol_days):
             fig.update_xaxes(tickvals=tickvals, ticktext=ticktext, tickangle=45, tickfont=dict(size=10), row=1, col=1)
             fig.update_xaxes(tickvals=tickvals, ticktext=ticktext, tickangle=45, tickfont=dict(size=10), row=2, col=1)
             
-            # 使用容器寬度適配螢幕
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig)
             st.write(f"成功繪製 {ticker} 的圖表")
         except Exception as e:
             st.error(f"繪製 {ticker} 的圖表時發生錯誤：{str(e)}")
