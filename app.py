@@ -72,9 +72,9 @@ if submit_button:
     
     # 更新 tickers
     if index_option == "NASDAQ 100":
-        tickers = get_nasdaq_100(csv_tickers="Tickers.csv")
+        tickers = get_nasdaq_100()
     elif index_option == "S&P 500":
-        tickers = get_sp500(csv_tickers="Tickers.csv")
+        tickers = get_sp500()
     else:
         tickers = get_nasdaq_all(csv_tickers="Tickers.csv")[:max_stocks]
     st.session_state['tickers'] = tickers
@@ -82,7 +82,7 @@ if submit_button:
     # 篩選邏輯
     with st.spinner("篩選中..."):
         progress_bar = st.progress(0)
-        df = screen_stocks(tickers, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr, progress_bar)
+        df = screen_stocks(tickers, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr, progress_bar)  # 移除 stock_pool
         progress_bar.progress(100)
         if 'stock_data' in st.session_state:
             st.write(f"批量數據已載入，涵蓋 {len(st.session_state['stock_data'].columns.get_level_values(1))} 檔股票")
