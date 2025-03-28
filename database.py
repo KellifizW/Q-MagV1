@@ -35,18 +35,22 @@ def check_readonly(db_path):
     """檢查資料庫是否唯讀並返回結果"""
     try:
         if not os.path.exists(db_path):
+            st.write(f"{db_path} 不存在，將創建新檔案")
             logger.info(f"{db_path} 不存在")
             return False
         with sqlite3.connect(db_path) as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS temp_test (id INTEGER)")
             conn.execute("DROP TABLE temp_test")
+        st.write(f"{db_path} 可寫入")
         logger.info(f"{db_path} 可寫入")
         return False
     except sqlite3.OperationalError as e:
         if "readonly" in str(e).lower():
+            st.write(f"{db_path} 是唯讀狀態")
             logger.error(f"{db_path} 是唯讀狀態")
             return True
         else:
+            st.write(f"{db_path} 訪問失敗：{str(e)}")
             logger.error(f"{db_path} 訪問失敗：{str(e)}")
             return True
 
@@ -89,6 +93,7 @@ def init_repo():
         subprocess.run(['git', 'config', 'core.autocrlf', 'true'], check=True)
         
         logger.info("Git 倉庫初始化完成")
+        st.write("成功初始化 Git 倉庫")
         return True
     except Exception as e:
         logger.error(f"Git 倉庫初始化失敗：{str(e)}")
@@ -164,9 +169,11 @@ def get_github_file_info():
             return {"size_kb": size, "last_updated": last_updated}
         else:
             logger.warning(f"無法獲取 GitHub 檔案資訊，狀態碼：{response.status_code}")
+            st.write(f"調試：無法獲取 GitHub 檔案資訊，狀態碼：{response.status_code}")
             return None
     except Exception as e:
         logger.error(f"查詢 GitHub 檔案資訊失敗：{str(e)}")
+        st.write(f"調試：查詢 GitHub 檔案資訊失敗：{str(e)}")
         return None
 
 def get_nasdaq_all(csv_tickers=TICKERS_CSV):
@@ -325,8 +332,42 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         conn.commit()
         conn.close()
 
-        st.session_state['rows_inserted'] = rows_inserted_total  # 保存插入行數
-        st.session_state['update_completed'] = True  # 標記更新完成
+        # 顯示更新結果
+        if rows_inserted_total > 0:
+            st.write(f"更新完成，插入 {rows_inserted_total} 行新數據")
+            st.write("請手動推送至 GitHub 以保存變更")
+        else:
+            st.write("更新完成，無新數據插入，無需推送")
+
+        # 提供下載按鈕
+        if os.path.exists(DB_PATH):
+            with open(DB_PATH, "rb") as file:
+                st.download_button(
+                    label="下載當前 stocks.db",
+                    data=file,
+                    file_name="stocks.db",
+                    mime="application/octet-stream"
+                )
+        else:
+            st.error("stocks.db 不存在，無法提供下載")
+
+        # 提供手動推送按鈕並顯示結果
+        if st.button("推送至 GitHub"):
+            push_success = push_to_github(repo, f"Manual push: Updated stocks.db with {rows_inserted_total} new rows (10% test)")
+            if not push_success:
+                st.error("推送失敗，請檢查日誌或網路連線")
+
+        # 查詢並顯示 GitHub 上的檔案資訊
+        github_info = get_github_file_info()
+        if github_info:
+            st.write(f"GitHub 上 stocks.db 資訊：")
+            st.write(f"- 大小：{github_info['size_kb']:.2f} KB")
+            st.write(f"- 最後更新（SHA）：{github_info['last_updated']}")
+        else:
+            st.write("無法獲取 GitHub 上 stocks.db 的資訊")
+
+        logger.info("資料庫更新完成（10% 測試，倒序）")
+        st.write("資料庫更新完成（10% 測試，倒序）")
         return True
 
     except Exception as e:
@@ -334,7 +375,23 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         st.error(f"資料庫更新失敗：{str(e)}")
         if 'conn' in locals():
             conn.close()
-        st.session_state['update_completed'] = False
+        if os.path.exists(DB_PATH):
+            with open(DB_PATH, "rb") as file:
+                st.download_button(
+                    label="下載當前 stocks.db（異常時）",
+                    data=file,
+                    file_name="stocks.db",
+                    mime="application/octet-stream"
+                )
+        if st.button("推送至 GitHub（異常後）"):
+            push_success = push_to_github(repo, "Manual push after error")
+            if not push_success:
+                st.error("推送失敗，請檢查日誌或網路連線")
+        github_info = get_github_file_info()
+        if github_info:
+            st.write(f"GitHub 上 stocks.db 資訊：")
+            st.write(f"- 大小：{github_info['size_kb']:.2f} KB")
+            st.write(f"- 最後更新（SHA）：{github_info['last_updated']}")
         return False
 
 def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
@@ -360,63 +417,7 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
         st.error(f"提取股票數據失敗，股票：{tickers}，錯誤：{str(e)}")
         return None
 
-def main():
-    # 初始化 session_state
-    if 'update_completed' not in st.session_state:
-        st.session_state['update_completed'] = False
-    if 'rows_inserted' not in st.session_state:
-        st.session_state['rows_inserted'] = 0
-
-    # 初始化 Git 倉庫
-    repo = init_repo()
-    if not repo:
-        return
-
-    # 顯示初始狀態
-    st.write(f"當前 stocks.db 狀態：{'已更新' if st.session_state['update_completed'] else '未更新'}")
-    if st.session_state['update_completed']:
-        st.write(f"已插入 {st.session_state['rows_inserted']} 行數據")
-
-    # 更新按鈕
-    if st.button("更新資料庫"):
-        with st.spinner("正在更新資料庫..."):
-            success = update_database(repo=repo)
-            if success:
-                st.write(f"更新完成，插入 {st.session_state['rows_inserted']} 行新數據")
-                st.write("請手動推送至 GitHub 以保存變更")
-            else:
-                st.write("更新失敗，請檢查日誌")
-
-    # 下載按鈕
-    if os.path.exists(DB_PATH):
-        with open(DB_PATH, "rb") as file:
-            st.download_button(
-                label="下載當前 stocks.db",
-                data=file,
-                file_name="stocks.db",
-                mime="application/octet-stream"
-            )
-    else:
-        st.error("stocks.db 不存在，無法提供下載")
-
-    # 推送按鈕
-    if st.button("推送至 GitHub"):
-        with st.spinner("正在推送至 GitHub..."):
-            if st.session_state['update_completed']:
-                push_success = push_to_github(repo, f"Manual push: Updated stocks.db with {st.session_state['rows_inserted']} new rows (10% test)")
-                if not push_success:
-                    st.error("推送失敗，請檢查日誌或網路連線")
-            else:
-                st.error("尚未更新資料庫，無需推送")
-
-    # 顯示 GitHub 資訊
-    github_info = get_github_file_info()
-    if github_info:
-        st.write(f"GitHub 上 stocks.db 資訊：")
-        st.write(f"- 大小：{github_info['size_kb']:.2f} KB")
-        st.write(f"- 最後更新（SHA）：{github_info['last_updated']}")
-    else:
-        st.write("無法獲取 GitHub 上 stocks.db 的資訊")
-
 if __name__ == "__main__":
-    main()
+    repo = init_repo()
+    if repo:
+        update_database(repo=repo)
