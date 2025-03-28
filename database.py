@@ -15,11 +15,12 @@ logger = logging.getLogger(__name__)
 
 # 常量定義
 REPO_DIR = "."
-DB_PATH = "stocks.db"  # 在 Streamlit Cloud 中使用臨時路徑
+DB_PATH = "stocks.db"
 TICKERS_CSV = "Tickers.csv"
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 20
+INITIAL_CHECK_PERCENTAGE = 0.10  # 檢查 10% 股票
 
 def download_with_retry(tickers, start, end, retries=2, delay=5):
     """簡化版帶重試的股票數據下載"""
@@ -88,7 +89,7 @@ def push_to_github(repo, message="Update stocks.db"):
         return False
 
 def init_database():
-    """從 GitHub 下載初始資料庫或創建新資料庫"""
+    """從 GitHub 下載初始資料庫或創建新資料邊"""
     if 'db_initialized' not in st.session_state:
         try:
             token = st.secrets["TOKEN"]
@@ -113,7 +114,7 @@ def init_database():
             st.session_state['db_initialized'] = False
 
 def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None):
-    """增量更新資料庫"""
+    """增量更新資料庫，包含完整性檢查"""
     if repo is None:
         st.error("未提供 Git 倉庫物件")
         return False
@@ -139,25 +140,37 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         current_date = datetime.now(US_EASTERN).date()
         end_date = current_date - timedelta(days=1)
         
-        if last_updated and pd.to_datetime(last_updated[0]).date() >= end_date:
-            st.write("資料庫已是最新，無需更新")
-            conn.close()
-            return True
-
         # 獲取現有股票的最後日期
         ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
         existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date']).dt.date))
 
-        # 確定需要更新的股票
+        # 檢查完整性：從最後 10% 股票開始檢查
+        num_to_check = max(1, int(len(tickers) * INITIAL_CHECK_PERCENTAGE))
+        tickers_to_check = tickers[-num_to_check:]
+        tickers_to_update = []
         start_date = end_date - timedelta(days=180)
-        tickers_to_update = [t for t in tickers if t not in existing_tickers or (end_date - existing_tickers.get(t, end_date)).days > 0]
+
+        for ticker in tickers_to_check:
+            last_date = existing_tickers.get(ticker)
+            if not last_date:  # 缺少股票數據
+                tickers_to_update.append(ticker)
+            elif (end_date - last_date).days > 0:  # 數據不是最新的
+                tickers_to_update.append(ticker)
 
         if not tickers_to_update:
-            st.write("股票數據已是最新，無需更新")
-            cursor.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
-            conn.commit()
-            conn.close()
-            return True
+            if last_updated and pd.to_datetime(last_updated[0]).date() >= end_date and len(existing_tickers) >= len(tickers):
+                st.write("資料庫已是最新且完整，無需更新")
+                conn.close()
+                return True
+            elif len(existing_tickers) < len(tickers):
+                st.write(f"資料庫缺少部分股票數據（現有 {len(existing_tickers)} / 共 {len(tickers)}），將更新缺失部分")
+                tickers_to_update = [t for t in tickers if t not in existing_tickers]
+            else:
+                st.write("資料庫數據已是最新，無需更新")
+                cursor.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
+                conn.commit()
+                conn.close()
+                return True
 
         # 分批下載並更新
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
