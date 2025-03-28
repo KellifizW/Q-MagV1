@@ -31,11 +31,12 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     """批量分析股票數據，返回符合條件的結果"""
     results = []
     failed_stocks = {}
-    required_days = prior_days + consol_days + 30
+    required_days = prior_days + consol_days + 30  # 60 天
     
     for ticker in tickers:
         try:
-            stock = data[ticker]
+            # 使用 xs 處理多層索引
+            stock = data.xs(ticker, level='Ticker', axis=1)
             if stock['Close'].isna().all() or len(stock) < required_days:
                 failed_stocks[ticker] = f"數據不足或無效，長度 {len(stock)}，需 {required_days}"
                 continue
@@ -89,14 +90,33 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     if failed_stocks:
         st.warning(f"無法分析的股票：{failed_stocks}")
     
-    return pd.concat(results) if results else pd.DataFrame()
+    # 計算符合條件的股票數量
+    if results:
+        combined_results = pd.concat(results)
+        unique_tickers = combined_results['Ticker'].nunique()
+        st.write(f"\n篩選結果：共找到 {unique_tickers} 隻股票符合條件")
+        return combined_results
+    else:
+        st.write("\n篩選結果：無股票符合條件")
+        return pd.DataFrame()
 
 def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5, progress_bar=None):
     """主篩選函數，從 SQLite 查詢數據"""
-    data = fetch_stock_data(tickers, trading_days=70)
+    # 這裡不再傳入 trading_days，直接提取所有數據
+    data, all_tickers = fetch_stock_data(tickers)  # 修改為接收所有數據和股票代碼
     if data is None:
         st.error("無法從資料庫獲取數據")
         return pd.DataFrame()
+    
+    # 根據 stock_pool 過濾股票
+    if stock_pool == "NASDAQ 100":
+        tickers = get_nasdaq_100(all_tickers)
+    elif stock_pool == "S&P 500":
+        tickers = [t for t in get_sp500() if t in all_tickers]
+    elif stock_pool == "NASDAQ All":
+        tickers = get_nasdaq_all(all_tickers)
+    
+    st.write(f"篩選股票池：{stock_pool}，共 {len(tickers)} 隻股票")
     
     results = analyze_stock_batch(data, tickers, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr)
     
