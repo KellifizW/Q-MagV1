@@ -46,6 +46,7 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
     try:
         all_data = []
         for ticker in tickers:
+            api_key = st.secrets["ALPHA_VANTAGE_API_KEY"]
             url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&apikey={api_key}&outputsize=full"
             response = requests.get(url).json()
             if "Time Series (Daily)" not in response:
