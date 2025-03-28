@@ -337,6 +337,29 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         st.session_state['update_completed'] = False
         return False
 
+def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
+    """從資料庫中提取股票數據，用於篩選"""
+    try:
+        conn = sqlite3.connect(db_path)
+        end_date = datetime.now(US_EASTERN).date()
+        start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[-trading_days].date()
+        
+        query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?']*len(tickers))}) AND Date >= ?"
+        data = pd.read_sql_query(query, conn, params=tickers + [start_date.strftime('%Y-%m-%d')], index_col='Date', parse_dates=True)
+        conn.close()
+        
+        if data.empty:
+            logger.error(f"資料庫中無符合條件的數據，股票：{tickers}")
+            st.error(f"資料庫中無符合條件的數據，股票：{tickers}")
+            return None
+        logger.info(f"成功從資料庫提取數據，股票：{tickers}，行數：{len(data)}")
+        st.write(f"調試：成功從資料庫提取數據，股票：{tickers}，行數：{len(data)}")
+        return data.pivot(columns='Ticker')
+    except Exception as e:
+        logger.error(f"提取股票數據失敗，股票：{tickers}，錯誤：{str(e)}")
+        st.error(f"提取股票數據失敗，股票：{tickers}，錯誤：{str(e)}")
+        return None
+
 def main():
     # 初始化 session_state
     if 'update_completed' not in st.session_state:
