@@ -48,8 +48,13 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             prev_close = close.shift(1)
             dates = stock.index
             
+            # 確保 shift 返回數值序列
             rise_22 = (close / close.shift(22) - 1) * 100
             rise_67 = (close / close.shift(67) - 1) * 100
+            if rise_22.isna().all() or rise_67.isna().all():
+                failed_stocks[ticker] = f"無法計算漲幅，數據長度不足（需至少 67 天，現有 {len(stock)} 天）"
+                continue
+            
             recent_high = close.rolling(consol_days).max()
             recent_low = close.rolling(consol_days).min()
             consolidation_range = (recent_high / recent_low - 1) * 100
@@ -102,8 +107,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
 
 def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5, progress_bar=None):
     """主篩選函數，從 SQLite 查詢數據"""
-    # 這裡不再傳入 trading_days，直接提取所有數據
-    data, all_tickers = fetch_stock_data(tickers)  # 修改為接收所有數據和股票代碼
+    data, all_tickers = fetch_stock_data(tickers)
     if data is None:
         st.error("無法從資料庫獲取數據")
         return pd.DataFrame()
