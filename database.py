@@ -25,7 +25,7 @@ nasdaq = mcal.get_calendar('NASDAQ')
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 
 # 設置 yfinance 快取位置
-yf.set_tz_cache_location("/tmp/yfinance_cache")  # 使用 /tmp 避免權限問題
+yf.set_tz_cache_location("/tmp/yfinance_cache")
 
 # 自訂 requests Session，擴大連線池
 session = requests.Session()
@@ -107,21 +107,24 @@ def download_with_retry(tickers, start, end, retries=5, delay=10):
     """帶重試機制的股票數據下載"""
     for attempt in range(retries):
         try:
-            logger.info(f"嘗試下載 {tickers}，第 {attempt + 1} 次")
-            st.write(f"嘗試下載 {len(tickers)} 檔股票，第 {attempt + 1} 次")
+            logger.info(f"嘗試下載 {tickers}，第 {attempt + 1} 次，日期範圍：{start} 至 {end}")
+            st.write(f"嘗試下載 {len(tickers)} 檔股票，第 {attempt + 1} 次，日期範圍：{start} 至 {end}")
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False, threads=False, session=session)
-            if not data.empty:
-                logger.info(f"成功下載 {len(tickers)} 檔股票數據")
+            if data.empty:
+                logger.warning(f"批次數據為空，可能是無效日期或股票已下市，重試 {attempt + 1}/{retries}")
+                st.write(f"批次數據為空，重試 {attempt + 1}/{retries}")
+            else:
+                logger.info(f"成功下載 {len(tickers)} 檔股票數據，列數：{len(data.columns)}")
                 st.write(f"成功下載 {len(tickers)} 檔股票數據")
                 return data
-            else:
-                logger.warning(f"批次數據為空，重試 {attempt + 1}/{retries}")
-                st.write(f"批次數據為空，重試 {attempt + 1}/{retries}")
         except Exception as e:
-            logger.warning(f"下載失敗: {e}，重試 {attempt + 1}/{retries}")
-            st.write(f"下載失敗: {e}，重試 {attempt + 1}/{retries}")
+            logger.warning(f"下載失敗: {str(e)}，重試 {attempt + 1}/{retries}")
+            st.write(f"下載失敗: {str(e)}，重試 {attempt + 1}/{retries}")
+            if "YFPricesMissingError" in str(e) and "no price data found" in str(e):
+                logger.error(f"確定為無數據錯誤，可能股票已下市或日期範圍無效：{tickers}")
+                break  # 如果是無數據錯誤，提前退出重試
             time.sleep(delay * (attempt + 1))
-    logger.error(f"下載 {tickers} 失敗，已達最大重試次數")
+    logger.error(f"下載 {tickers} 失敗，已達最大重試次數，日期範圍：{start} 至 {end}")
     st.error(f"下載 {len(tickers)} 檔股票失敗，已達最大重試次數")
     return None
 
@@ -143,8 +146,16 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         cursor.execute("DELETE FROM stocks")
         cursor.execute("DELETE FROM metadata")
         
-        end_date = datetime.now().date()
-        start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
+        current_date = datetime.now().date()
+        end_date = current_date - timedelta(days=1)  # 確保結束日期不過未來
+        schedule = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date)
+        if schedule.empty:
+            logger.error("NASDAQ 日曆無效，無法確定交易日")
+            st.error("NASDAQ 日曆無效，無法初始化資料庫")
+            return False
+        start_date = schedule.index[0].date()
+        logger.info(f"初始化資料庫，日期範圍：{start_date} 至 {end_date}")
+        st.write(f"初始化資料庫，日期範圍：{start_date} 至 {end_date}")
         
         total_batches = (len(tickers) + batch_size - 1) // batch_size
         for i in range(0, len(tickers), batch_size):
@@ -188,7 +199,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             conn.commit()
             if batch_num % 10 == 0 or batch_num == total_batches:
                 push_to_github(repo, f"Initialized {batch_num} batches of stock data")
-            time.sleep(5)  # 增加批次間延遲
+            time.sleep(5)
         
         cursor.execute("INSERT INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
         conn.commit()
@@ -214,7 +225,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        current_date = datetime.now().date()
+        current_date = datetime.now().date() - timedelta(days=1)  # 避免未來日期
         cursor.execute("SELECT last_updated FROM metadata")
         last_updated = cursor.fetchone()
         if last_updated:
@@ -229,14 +240,16 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         
         schedule = nasdaq.schedule(start_date=last_updated_date, end_date=current_date)
         if len(schedule) <= 1:
-            logger.info("今日無新數據，已跳過更新")
+            logger.info("無新交易日數據，已跳過更新")
             st.write("今日無新數據，已跳過更新")
             conn.close()
             return False
         
         start_date = last_updated_date + timedelta(days=1)
-        total_batches = (len(tickers) + batch_size - 1) // batch_size
+        logger.info(f"更新資料庫，日期範圍：{start_date} 至 {current_date}")
+        st.write(f"更新資料庫，日期範圍：{start_date} 至 {current_date}")
         
+        total_batches = (len(tickers) + batch_size - 1) // batch_size
         for i in range(0, len(tickers), batch_size):
             batch_tickers = tickers[i:i + batch_size]
             batch_num = i // batch_size + 1
@@ -333,8 +346,10 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
             return False
         
         st.write(f"檢測到 {len(missing_tickers)} 隻 S&P 500 股票缺失，正在補充...")
-        end_date = datetime.now().date()
+        end_date = datetime.now().date() - timedelta(days=1)  # 避免未來日期
         start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
+        logger.info(f"補充 S&P 500 股票，日期範圍：{start_date} 至 {end_date}")
+        st.write(f"補充 S&P 500 股票，日期範圍：{start_date} 至 {end_date}")
         
         total_batches = (len(missing_tickers) + batch_size - 1) // batch_size
         for i in range(0, len(missing_tickers), batch_size):
