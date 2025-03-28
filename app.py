@@ -69,12 +69,20 @@ if submit_button:
     # 重置篩選結果
     if 'df' in st.session_state:
         del st.session_state['df']
-    
+
+   # 讀取 Tickers.csv 作為基礎清單
+    try:
+        tickers_df = pd.read_csv("Tickers.csv")
+        csv_tickers = tickers_df['Ticker'].tolist()
+    except Exception as e:
+        st.error(f"無法讀取 Tickers.csv: {str(e)}")
+        csv_tickers = ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA']  # 備用清單
+
     # 更新 tickers
     if index_option == "NASDAQ 100":
-        tickers = get_nasdaq_100()
+        tickers = get_nasdaq_100(csv_tickers)
     elif index_option == "S&P 500":
-        tickers = get_sp500()
+        tickers = get_sp500(csv_tickers)
     else:
         tickers = get_nasdaq_all(csv_tickers="Tickers.csv")[:max_stocks]
     st.session_state['tickers'] = tickers
