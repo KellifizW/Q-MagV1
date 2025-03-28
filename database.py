@@ -310,7 +310,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         return False
 
 def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
-    """更新資料庫，添加調試訊息檢查每次批次後的資料庫變更"""
+    """更新資料庫，修正日期範圍並添加詳細調試訊息"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -331,7 +331,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         
         # 使用美國東部時間計算當前日期
         current_date_et = datetime.now(US_EASTERN).date()
-        end_date = current_date_et - timedelta(days=1)  # 結束日期為昨天（ET）
+        end_date = current_date_et  # 結束日期為今天（ET）
         
         # 檢查 metadata 是否有記錄
         cursor.execute("SELECT last_updated FROM metadata")
@@ -352,16 +352,13 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             last_updated_date = schedule.index[0].date()
             st.write(f"無上次更新記錄，從 180 天前開始：{last_updated_date} (美國東部時間)")
         
-        start_date = last_updated_date
+        # 設置開始日期為上次更新後的第一天
+        start_date = last_updated_date + timedelta(days=1)
         if start_date >= end_date:
-            schedule = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date)
-            if schedule.empty:
-                logger.error("NASDAQ 日曆無效，無法確定交易日")
-                st.error("NASDAQ 日曆無效，無法更新資料庫")
-                return False
-            start_date = schedule.index[0].date()
-            logger.info(f"上次更新日期晚於或等於昨天，調整開始日期為：{start_date} (美國東部時間)")
-            st.write(f"上次更新日期晚於或等於昨天，調整開始日期為：{start_date} (美國東部時間)")
+            logger.info("無新交易日數據可更新，已跳過")
+            st.write("無新交易日數據可更新，已跳過")
+            conn.close()
+            return False
         
         schedule = nasdaq.schedule(start_date=start_date, end_date=end_date)
         if schedule.empty:
@@ -448,8 +445,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             logger.info(f"批次 {batch_num} 完成，插入 {rows_inserted} 行，stocks.db 大小：{file_size_after} bytes")
             st.write(f"調試：批次 {batch_num} 完成，插入 {rows_inserted} 行，stocks.db 大小：{file_size_after} bytes")
             
-            if batch_num % 10 == 0 or batch_num == total_batches:
-                push_to_github(repo, f"Updated {batch_num} batches of stock data")
+            push_to_github(repo, f"Updated batch {batch_num}/{total_batches} of stock data")
             time.sleep(5)
         
         cursor.execute("UPDATE metadata SET last_updated = ?", (end_date.strftime('%Y-%m-%d'),))
