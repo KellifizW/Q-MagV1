@@ -71,19 +71,27 @@ def init_repo():
         return None
 
 def push_to_github(repo, message="Update stocks.db"):
-    """推送變更到 GitHub，添加詳細除錯訊息並確保 stocks.db 被正確提交"""
+    """推送變更到 GitHub，添加更多調試訊息以診斷問題"""
     try:
         os.chdir(REPO_DIR)
-        # 確保 stocks.db 存在並檢查其修改時間
+        # 顯示當前工作目錄和 DB_PATH
+        current_dir = os.getcwd()
+        logger.info(f"當前工作目錄：{current_dir}")
+        st.write(f"調試：當前工作目錄：{current_dir}")
+        logger.info(f"DB_PATH：{DB_PATH}")
+        st.write(f"調試：DB_PATH：{DB_PATH}")
+
+        # 確保 stocks.db 存在並檢查檔案大小與修改時間
         if not os.path.exists(DB_PATH):
             logger.error(f"stocks.db 不存在於路徑：{DB_PATH}")
             st.error(f"stocks.db 不存在於路徑：{DB_PATH}")
             return False
+        file_size = os.path.getsize(DB_PATH)
         file_mtime = datetime.fromtimestamp(os.path.getmtime(DB_PATH)).strftime('%Y-%m-%d %H:%M:%S')
-        logger.info(f"stocks.db 存在，修改時間：{file_mtime}")
-        st.write(f"調試：stocks.db 存在，修改時間：{file_mtime}")
+        logger.info(f"stocks.db 存在，檔案大小：{file_size} bytes，修改時間：{file_mtime}")
+        st.write(f"調試：stocks.db 存在，檔案大小：{file_size} bytes，修改時間：{file_mtime}")
 
-        # 檢查當前分支並強制添加 stocks.db
+        # 檢查當前分支
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
         logger.info(f"當前分支：{branch}")
         st.write(f"調試：當前分支：{branch}")
@@ -98,20 +106,27 @@ def push_to_github(repo, message="Update stocks.db"):
         logger.info(f"Git add stocks.db 結果 - stdout: {add_result.stdout}, stderr: {add_result.stderr}")
         st.write(f"調試：Git add stocks.db 結果 - stdout: {add_result.stdout}, stderr: {add_result.stderr}")
 
-        # 再次檢查 Git 狀態，確認 stocks.db 已加入
+        # 再次檢查 Git 狀態
         status_after_add = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True)
         logger.info(f"Git status (after add) 輸出：{status_after_add.stdout}")
         st.write(f"調試：Git status (after add) 輸出：{status_after_add.stdout}")
 
         if "stocks.db" not in status_after_add.stdout:
-            logger.warning("stocks.db 未被 Git 識別為已修改，可能是未改變或被 .gitignore 忽略")
-            st.write("調試：stocks.db 未被 Git 識別為已修改，可能是未改變或被 .gitignore 忽略")
+            logger.warning("stocks.db 未被 Git 識別為已修改，檢查原因")
+            st.write("調試：stocks.db 未被 Git 識別為已修改，檢查原因")
             # 檢查 .gitignore
             if os.path.exists(".gitignore"):
                 with open(".gitignore", "r") as f:
                     gitignore_content = f.read()
                     logger.info(f".gitignore 內容：{gitignore_content}")
                     st.write(f"調試：.gitignore 內容：{gitignore_content}")
+            else:
+                logger.info(".gitignore 文件不存在")
+                st.write("調試：.gitignore 文件不存在")
+            # 檢查 stocks.db 是否已被 Git 追蹤
+            tracked_files = subprocess.run(['git', 'ls-files'], capture_output=True, text=True).stdout
+            logger.info(f"Git 追蹤的文件：{tracked_files}")
+            st.write(f"調試：Git 追蹤的文件：{tracked_files}")
             return False
 
         # 提交變更
@@ -295,7 +310,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         return False
 
 def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
-    """更新資料庫，檢查130個交易日數據，每次最多新增100個新股票，使用美國東部時間"""
+    """更新資料庫，添加調試訊息檢查每次批次後的資料庫變更"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -329,7 +344,6 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
                 last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d').date()
             st.write(f"上次更新日期：{last_updated_date} (美國東部時間)")
         else:
-            # 若無記錄，從 180 天前開始
             schedule = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date)
             if schedule.empty:
                 logger.error("NASDAQ 日曆無效，無法確定交易日")
@@ -338,7 +352,6 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             last_updated_date = schedule.index[0].date()
             st.write(f"無上次更新記錄，從 180 天前開始：{last_updated_date} (美國東部時間)")
         
-        # 設置 start_date，若上次更新日期晚於或等於昨天，則回溯 180 天
         start_date = last_updated_date
         if start_date >= end_date:
             schedule = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date)
@@ -350,7 +363,6 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             logger.info(f"上次更新日期晚於或等於昨天，調整開始日期為：{start_date} (美國東部時間)")
             st.write(f"上次更新日期晚於或等於昨天，調整開始日期為：{start_date} (美國東部時間)")
         
-        # 確保日期範圍至少包含一個交易日
         schedule = nasdaq.schedule(start_date=start_date, end_date=end_date)
         if schedule.empty:
             logger.info("無新交易日數據，已跳過更新")
@@ -361,7 +373,6 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         logger.info(f"更新資料庫，日期範圍：{start_date} 至 {end_date} (美國東部時間)")
         st.write(f"更新資料庫，日期範圍：{start_date} 至 {end_date} (美國東部時間)")
         
-        # 檢查現有股票及其交易日數
         ticker_days = pd.read_sql_query("SELECT Ticker, COUNT(DISTINCT Date) as days FROM stocks GROUP BY Ticker", conn)
         existing_tickers = {row['Ticker']: row['days'] for _, row in ticker_days.iterrows()}
         
@@ -387,6 +398,10 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         st.write(f"需下載的股票：{tickers_to_download}")
         
         total_batches = (len(tickers_to_download) + batch_size - 1) // batch_size
+        initial_file_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+        logger.info(f"開始更新前 stocks.db 大小：{initial_file_size} bytes")
+        st.write(f"調試：開始更新前 stocks.db 大小：{initial_file_size} bytes")
+
         for i in range(0, len(tickers_to_download), batch_size):
             batch_tickers = tickers_to_download[i:i + batch_size]
             batch_num = i // batch_size + 1
@@ -413,6 +428,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             pivoted_df = pd.concat(all_data, ignore_index=True)
             pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
             
+            rows_inserted = 0
             for _, row in pivoted_df.iterrows():
                 cursor.execute('''INSERT OR IGNORE INTO stocks 
                     (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
@@ -424,8 +440,14 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
                     float(row['Close']) if pd.notna(row['Close']) else None,
                     float(row['Close']) if pd.notna(row['Close']) else None,
                     int(row['Volume']) if pd.notna(row['Volume']) else 0))
+                if cursor.rowcount > 0:
+                    rows_inserted += 1
             
             conn.commit()
+            file_size_after = os.path.getsize(DB_PATH)
+            logger.info(f"批次 {batch_num} 完成，插入 {rows_inserted} 行，stocks.db 大小：{file_size_after} bytes")
+            st.write(f"調試：批次 {batch_num} 完成，插入 {rows_inserted} 行，stocks.db 大小：{file_size_after} bytes")
+            
             if batch_num % 10 == 0 or batch_num == total_batches:
                 push_to_github(repo, f"Updated {batch_num} batches of stock data")
             time.sleep(5)
@@ -434,6 +456,10 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         if not last_updated:
             cursor.execute("INSERT INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
         conn.commit()
+        final_file_size = os.path.getsize(DB_PATH)
+        logger.info(f"最終 stocks.db 大小：{final_file_size} bytes")
+        st.write(f"調試：最終 stocks.db 大小：{final_file_size} bytes")
+        
         push_to_github(repo, "Final update of stocks.db")
         conn.close()
         
