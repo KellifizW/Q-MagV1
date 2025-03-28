@@ -31,37 +31,39 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     """批量分析股票數據，返回符合條件的結果"""
     results = []
     failed_stocks = {}
+    matched_count = 0
+    unmatched_count = 0
     required_days = prior_days + consol_days + 30  # 60 天
     
     for ticker in tickers:
         try:
-            # 使用 xs 處理多層索引
             stock = data.xs(ticker, level='Ticker', axis=1)
-            st.write(f"調試 {ticker} - stock 類型: {type(stock)}, 長度: {len(stock)}")
-            if stock['Close'].isna().all() or len(stock) < required_days:
-                failed_stocks[ticker] = f"數據不足或無效，長度 {len(stock)}，需 {required_days}"
+            if not isinstance(stock, pd.DataFrame):
+                failed_stocks[ticker] = f"stock 不是 DataFrame，類型為 {type(stock)}"
                 continue
             
-            close = stock['Close']
-            volume = stock['Volume']
-            high = stock['High']
-            low = stock['Low']
+            close = pd.Series(stock['Close'])
+            volume = pd.Series(stock['Volume'])
+            high = pd.Series(stock['High'])
+            low = pd.Series(stock['Low'])
             prev_close = close.shift(1)
             dates = stock.index
             
-            st.write(f"調試 {ticker} - close 類型: {type(close)}, 長度: {len(close)}")
+            if close.isna().all() or len(close) < required_days:
+                failed_stocks[ticker] = f"數據不足或無效，長度 {len(close)}，需 {required_days}"
+                continue
             
-            # 計算漲幅並檢查類型
-            shift_22 = close.shift(22)
-            shift_67 = close.shift(67)
-            st.write(f"調試 {ticker} - shift_22 類型: {type(shift_22)}, shift_67 類型: {type(shift_67)}")
+            close_shift_22 = close.shift(22)
+            close_shift_67 = close.shift(67)
+            rise_22 = (close / close_shift_22 - 1) * 100
+            rise_67 = (close / close_shift_67 - 1) * 100
             
-            rise_22 = (close / shift_22 - 1) * 100
-            rise_67 = (close / shift_67 - 1) * 100
-            st.write(f"調試 {ticker} - rise_22 類型: {type(rise_22)}, rise_67 類型: {type(rise_67)}")
+            if not isinstance(rise_22, pd.Series) or not isinstance(rise_67, pd.Series):
+                failed_stocks[ticker] = f"rise_22 或 rise_67 不是 Series，類型: {type(rise_22)}, {type(rise_67)}"
+                continue
             
             if rise_22.isna().all() or rise_67.isna().all():
-                failed_stocks[ticker] = f"無法計算漲幅，數據長度不足（需至少 67 天，現有 {len(stock)} 天）"
+                failed_stocks[ticker] = f"無法計算漲幅，數據長度不足（需至少 67 天，現有 {len(close)} 天）"
                 continue
             
             recent_high = close.rolling(consol_days).max()
@@ -73,12 +75,11 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             breakout = (close > recent_high.shift(1)) & (close.shift(1) <= recent_high.shift(1))
             breakout_volume = volume > volume.rolling(10).mean() * 1.5
             
-            st.write(f"調試 {ticker} - mask 計算前檢查: rise_22 示例值: {rise_22.iloc[-1] if not rise_22.isna().all() else '全為 NaN'}")
-            
             mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & \
                    (consolidation_range <= max_range) & (adr >= min_adr)
             
             if mask.any():
+                matched_count += 1
                 matched = pd.DataFrame({
                     'Ticker': ticker,
                     'Date': dates[mask],
@@ -95,6 +96,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                          f"67 日漲幅 = {rise_67.iloc[-1]:.2f}%, 盤整範圍 = {consolidation_range.iloc[-1]:.2f}%, "
                          f"ADR = {adr.iloc[-1]:.2f}%")
             else:
+                unmatched_count += 1
                 st.write(f"股票 {ticker} 不符合條件：22 日漲幅 = {rise_22.iloc[-1]:.2f}% (需 >= {min_rise_22}), "
                          f"67 日漲幅 = {rise_67.iloc[-1]:.2f}% (需 >= {min_rise_67}), "
                          f"盤整範圍 = {consolidation_range.iloc[-1]:.2f}% (需 <= {max_range}), "
@@ -106,14 +108,15 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     if failed_stocks:
         st.warning(f"無法分析的股票：{failed_stocks}")
     
-    # 計算符合條件的股票數量
+    total_analyzed = matched_count + unmatched_count + len(failed_stocks)
+    st.write(f"\n分析統計：共分析 {total_analyzed} 隻股票，"
+             f"符合條件 {matched_count} 隻，不符合條件 {unmatched_count} 隻，"
+             f"無法分析 {len(failed_stocks)} 隻")
+    
     if results:
         combined_results = pd.concat(results)
-        unique_tickers = combined_results['Ticker'].nunique()
-        st.write(f"\n篩選結果：共找到 {unique_tickers} 隻股票符合條件")
         return combined_results
     else:
-        st.write("\n篩選結果：無股票符合條件")
         return pd.DataFrame()
 
 def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5, progress_bar=None):
@@ -123,7 +126,6 @@ def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_2
         st.error("無法從資料庫獲取數據")
         return pd.DataFrame()
     
-    # 根據 stock_pool 過濾股票
     if stock_pool == "NASDAQ 100":
         tickers = get_nasdaq_100(all_tickers)
     elif stock_pool == "S&P 500":
