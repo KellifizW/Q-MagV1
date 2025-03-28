@@ -71,28 +71,54 @@ def init_repo():
         return None
 
 def push_to_github(repo, message="Update stocks.db"):
-    """推送變更到 GitHub，添加詳細除錯訊息"""
+    """推送變更到 GitHub，添加詳細除錯訊息並確保 stocks.db 被正確提交"""
     try:
         os.chdir(REPO_DIR)
-        # 檢查倉庫狀態
+        # 確保 stocks.db 存在並檢查其修改時間
+        if not os.path.exists(DB_PATH):
+            logger.error(f"stocks.db 不存在於路徑：{DB_PATH}")
+            st.error(f"stocks.db 不存在於路徑：{DB_PATH}")
+            return False
+        file_mtime = datetime.fromtimestamp(os.path.getmtime(DB_PATH)).strftime('%Y-%m-%d %H:%M:%S')
+        logger.info(f"stocks.db 存在，修改時間：{file_mtime}")
+        st.write(f"調試：stocks.db 存在，修改時間：{file_mtime}")
+
+        # 檢查當前分支並強制添加 stocks.db
+        branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
+        logger.info(f"當前分支：{branch}")
+        st.write(f"調試：當前分支：{branch}")
+
+        # 檢查 Git 狀態
         status = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True)
         logger.info(f"Git status 輸出：{status.stdout}")
         st.write(f"調試：Git status 輸出：{status.stdout}")
-        if not status.stdout.strip():
-            logger.info("沒有需要提交的變更")
-            st.write("沒有變更需要推送")
-            return True
-        
-        # 添加檔案
-        add_result = subprocess.run(['git', 'add', 'stocks.db'], check=True, capture_output=True, text=True)
-        logger.info(f"Git add 結果 - stdout: {add_result.stdout}, stderr: {add_result.stderr}")
-        st.write(f"調試：Git add 結果 - stdout: {add_result.stdout}, stderr: {add_result.stderr}")
-        
+
+        # 強制添加 stocks.db
+        add_result = subprocess.run(['git', 'add', DB_PATH], check=True, capture_output=True, text=True)
+        logger.info(f"Git add stocks.db 結果 - stdout: {add_result.stdout}, stderr: {add_result.stderr}")
+        st.write(f"調試：Git add stocks.db 結果 - stdout: {add_result.stdout}, stderr: {add_result.stderr}")
+
+        # 再次檢查 Git 狀態，確認 stocks.db 已加入
+        status_after_add = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True)
+        logger.info(f"Git status (after add) 輸出：{status_after_add.stdout}")
+        st.write(f"調試：Git status (after add) 輸出：{status_after_add.stdout}")
+
+        if "stocks.db" not in status_after_add.stdout:
+            logger.warning("stocks.db 未被 Git 識別為已修改，可能是未改變或被 .gitignore 忽略")
+            st.write("調試：stocks.db 未被 Git 識別為已修改，可能是未改變或被 .gitignore 忽略")
+            # 檢查 .gitignore
+            if os.path.exists(".gitignore"):
+                with open(".gitignore", "r") as f:
+                    gitignore_content = f.read()
+                    logger.info(f".gitignore 內容：{gitignore_content}")
+                    st.write(f"調試：.gitignore 內容：{gitignore_content}")
+            return False
+
         # 提交變更
         commit_result = subprocess.run(['git', 'commit', '-m', message], check=True, capture_output=True, text=True)
         logger.info(f"Git commit 結果 - stdout: {commit_result.stdout}, stderr: {commit_result.stderr}")
         st.write(f"調試：Git commit 結果 - stdout: {commit_result.stdout}, stderr: {commit_result.stderr}")
-        
+
         # 檢查 TOKEN
         if "TOKEN" not in st.secrets:
             logger.error("st.secrets 中未找到 TOKEN")
@@ -101,17 +127,16 @@ def push_to_github(repo, message="Update stocks.db"):
         token = st.secrets["TOKEN"]
         logger.info("成功從 st.secrets 獲取 TOKEN 用於推送")
         st.write("成功從 st.secrets 獲取 TOKEN 用於推送")
-        
+
         # 推送至遠端
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
-        branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
         logger.info(f"推送至遠端：{remote_url}，分支：{branch}")
         st.write(f"調試：推送至遠端：{remote_url}，分支：{branch}")
-        
+
         push_result = subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
         logger.info(f"Git push 結果 - stdout: {push_result.stdout}, stderr: {push_result.stderr}")
         st.write(f"調試：Git push 結果 - stdout: {push_result.stdout}, stderr: {push_result.stderr}")
-        
+
         logger.info(f"成功推送至 GitHub，提交訊息：{message}")
         st.write(f"已推送至 GitHub: {message}")
         return True
