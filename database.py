@@ -22,11 +22,13 @@ logger = logging.getLogger(__name__)
 # 定義路徑和常量
 REPO_DIR = "."
 DB_PATH = os.path.join(REPO_DIR, "stocks.db")
+TICKERS_CSV = "Tickers.csv"  # 假設 Tickers.csv 在根目錄
 nasdaq = mcal.get_calendar('NASDAQ')
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 MIN_TRADING_DAYS = 130  # 最小交易日數要求
 MAX_NEW_TICKERS_PER_UPDATE = 100  # 每次更新最多新增股票數
 US_EASTERN = timezone('US/Eastern')  # 美國東部時區
+BATCH_SIZE = 20  # 批次大小
 
 # 設置 yfinance 快取位置
 yf.set_tz_cache_location("/tmp/yfinance_cache")
@@ -74,14 +76,12 @@ def push_to_github(repo, message="Update stocks.db"):
     """推送變更到 GitHub，添加更多調試訊息以診斷問題"""
     try:
         os.chdir(REPO_DIR)
-        # 顯示當前工作目錄和 DB_PATH
         current_dir = os.getcwd()
         logger.info(f"當前工作目錄：{current_dir}")
         st.write(f"調試：當前工作目錄：{current_dir}")
         logger.info(f"DB_PATH：{DB_PATH}")
         st.write(f"調試：DB_PATH：{DB_PATH}")
 
-        # 確保 stocks.db 存在並檢查檔案大小與修改時間
         if not os.path.exists(DB_PATH):
             logger.error(f"stocks.db 不存在於路徑：{DB_PATH}")
             st.error(f"stocks.db 不存在於路徑：{DB_PATH}")
@@ -91,22 +91,18 @@ def push_to_github(repo, message="Update stocks.db"):
         logger.info(f"stocks.db 存在，檔案大小：{file_size} bytes，修改時間：{file_mtime}")
         st.write(f"調試：stocks.db 存在，檔案大小：{file_size} bytes，修改時間：{file_mtime}")
 
-        # 檢查當前分支
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
         logger.info(f"當前分支：{branch}")
         st.write(f"調試：當前分支：{branch}")
 
-        # 檢查 Git 狀態
         status = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True)
         logger.info(f"Git status 輸出：{status.stdout}")
         st.write(f"調試：Git status 輸出：{status.stdout}")
 
-        # 強制添加 stocks.db
         add_result = subprocess.run(['git', 'add', DB_PATH], check=True, capture_output=True, text=True)
         logger.info(f"Git add stocks.db 結果 - stdout: {add_result.stdout}, stderr: {add_result.stderr}")
         st.write(f"調試：Git add stocks.db 結果 - stdout: {add_result.stdout}, stderr: {add_result.stderr}")
 
-        # 再次檢查 Git 狀態
         status_after_add = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True)
         logger.info(f"Git status (after add) 輸出：{status_after_add.stdout}")
         st.write(f"調試：Git status (after add) 輸出：{status_after_add.stdout}")
@@ -114,7 +110,6 @@ def push_to_github(repo, message="Update stocks.db"):
         if "stocks.db" not in status_after_add.stdout:
             logger.warning("stocks.db 未被 Git 識別為已修改，檢查原因")
             st.write("調試：stocks.db 未被 Git 識別為已修改，檢查原因")
-            # 檢查 .gitignore
             if os.path.exists(".gitignore"):
                 with open(".gitignore", "r") as f:
                     gitignore_content = f.read()
@@ -123,18 +118,15 @@ def push_to_github(repo, message="Update stocks.db"):
             else:
                 logger.info(".gitignore 文件不存在")
                 st.write("調試：.gitignore 文件不存在")
-            # 檢查 stocks.db 是否已被 Git 追蹤
             tracked_files = subprocess.run(['git', 'ls-files'], capture_output=True, text=True).stdout
             logger.info(f"Git 追蹤的文件：{tracked_files}")
             st.write(f"調試：Git 追蹤的文件：{tracked_files}")
             return False
 
-        # 提交變更
         commit_result = subprocess.run(['git', 'commit', '-m', message], check=True, capture_output=True, text=True)
         logger.info(f"Git commit 結果 - stdout: {commit_result.stdout}, stderr: {commit_result.stderr}")
         st.write(f"調試：Git commit 結果 - stdout: {commit_result.stdout}, stderr: {commit_result.stderr}")
 
-        # 檢查 TOKEN
         if "TOKEN" not in st.secrets:
             logger.error("st.secrets 中未找到 TOKEN")
             st.error("未找到 'TOKEN'，請在 Streamlit Cloud 的 Secrets 中配置為：TOKEN = \"your_token\"")
@@ -143,7 +135,6 @@ def push_to_github(repo, message="Update stocks.db"):
         logger.info("成功從 st.secrets 獲取 TOKEN 用於推送")
         st.write("成功從 st.secrets 獲取 TOKEN 用於推送")
 
-        # 推送至遠端
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         logger.info(f"推送至遠端：{remote_url}，分支：{branch}")
         st.write(f"調試：推送至遠端：{remote_url}，分支：{branch}")
@@ -190,210 +181,95 @@ def download_with_retry(tickers, start, end, retries=5, delay=10):
     st.error(f"下載 {len(tickers)} 檔股票失敗，已達最大重試次數，股票：{tickers}，日期範圍：{start} 至 {end}")
     return None
 
-def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
-    """初始化資料庫，檢查現有數據並增量添加，最多新增100個新股票，使用美國東部時間"""
+def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None):
+    """檢查並更新資料庫，確保所有股票有至少130天的數據"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         return False
 
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # 創建表（若不存在）
-        cursor.execute('''CREATE TABLE IF NOT EXISTS stocks (
-            Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
-            PRIMARY KEY (Date, Ticker))''')
-        cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
-        
-        logger.info(f"初始化資料庫，檢查所有股票：{len(tickers)} 筆")
-        st.write(f"初始化資料庫，檢查所有股票：{len(tickers)} 筆")
-        
-        # 使用美國東部時間計算當前日期
-        current_date = datetime.now(US_EASTERN).date()
-        end_date = current_date - timedelta(days=1)  # 結束日期為昨天（ET）
-        schedule = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date)
-        if schedule.empty:
-            logger.error("NASDAQ 日曆無效，無法確定交易日")
-            st.error("NASDAQ 日曆無效，無法初始化資料庫")
-            return False
-        start_date = schedule.index[0].date()
-        logger.info(f"初始化資料庫，日期範圍：{start_date} 至 {end_date} (美國東部時間)")
-        st.write(f"初始化資料庫，日期範圍：{start_date} 至 {end_date} (美國東部時間)")
-        
-        # 檢查現有股票及其交易日數
-        ticker_days = pd.read_sql_query("SELECT Ticker, COUNT(DISTINCT Date) as days FROM stocks GROUP BY Ticker", conn)
-        existing_tickers = {row['Ticker']: row['days'] for _, row in ticker_days.iterrows()}
-        
-        tickers_to_download = []
-        new_ticker_count = 0
-        for ticker in tickers:
-            if ticker in existing_tickers and existing_tickers[ticker] >= MIN_TRADING_DAYS:
-                logger.info(f"股票 {ticker} 已有多於 {MIN_TRADING_DAYS} 天的數據，跳過")
-                st.write(f"股票 {ticker} 已有多於 {MIN_TRADING_DAYS} 天的數據，跳過")
-                continue
-            if new_ticker_count >= MAX_NEW_TICKERS_PER_UPDATE:
-                break
-            tickers_to_download.append(ticker)
-            new_ticker_count += 1
-        
-        if not tickers_to_download:
-            logger.info("無需下載新股票，所有股票已有足夠數據或已達限制")
-            st.write("無需下載新股票，所有股票已有足夠數據或已達限制")
-            conn.close()
+        # 讀取 Tickers.csv
+        if not os.path.exists(tickers_file):
+            logger.error(f"找不到 {tickers_file} 檔案")
+            st.error(f"找不到 {tickers_file} 檔案，請確保檔案存在於根目錄")
             return False
         
-        logger.info(f"需下載的股票：{tickers_to_download}")
-        st.write(f"需下載的股票：{tickers_to_download}")
-        
-        total_batches = (len(tickers_to_download) + batch_size - 1) // batch_size
-        for i in range(0, len(tickers_to_download), batch_size):
-            batch_tickers = tickers_to_download[i:i + batch_size]
-            batch_num = i // batch_size + 1
-            st.write(f"初始化：下載批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票：{batch_tickers})")
-            
-            data = download_with_retry(batch_tickers, start=start_date, end=end_date)
-            if data is None:
-                logger.warning(f"批次 {batch_num} 下載失敗，跳過：{batch_tickers}")
-                continue
-            
-            df = data.reset_index()
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in df.columns]
-            
-            tickers_in_batch = list({col.split('_')[0] for col in df.columns if '_' in col})
-            all_data = []
-            for ticker in tickers_in_batch:
-                ticker_cols = [col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']
-                ticker_df = df[ticker_cols].copy()
-                ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
-                ticker_df['Ticker'] = ticker
-                all_data.append(ticker_df)
-            
-            pivoted_df = pd.concat(all_data, ignore_index=True)
-            pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
-            
-            for _, row in pivoted_df.iterrows():
-                cursor.execute('''INSERT OR IGNORE INTO stocks 
-                    (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
-                    str(row['Date']), str(row['Ticker']),
-                    float(row['Open']) if pd.notna(row['Open']) else None,
-                    float(row['High']) if pd.notna(row['High']) else None,
-                    float(row['Low']) if pd.notna(row['Low']) else None,
-                    float(row['Close']) if pd.notna(row['Close']) else None,
-                    float(row['Close']) if pd.notna(row['Close']) else None,
-                    int(row['Volume']) if pd.notna(row['Volume']) else 0))
-            
-            conn.commit()
-            if batch_num % 10 == 0 or batch_num == total_batches:
-                push_to_github(repo, f"Initialized {batch_num} batches of stock data")
-            time.sleep(5)
-        
-        # 更新 metadata
-        cursor.execute("SELECT last_updated FROM metadata")
-        if not cursor.fetchone():
-            cursor.execute("INSERT INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
-        else:
-            cursor.execute("UPDATE metadata SET last_updated = ?", (end_date.strftime('%Y-%m-%d'),))
-        conn.commit()
-        push_to_github(repo, "Final initialization of stocks.db")
-        conn.close()
-        
-        logger.info("資料庫初始化完成")
-        st.write("資料庫初始化完成")
-        return True
-    except Exception as e:
-        logger.error(f"資料庫初始化失敗：{str(e)}")
-        st.error(f"資料庫初始化失敗：{str(e)}")
-        return False
+        tickers_df = pd.read_csv(tickers_file)
+        tickers = tickers_df['Ticker'].tolist()  # 假設 CSV 有 'Ticker' 欄位
+        logger.info(f"從 {tickers_file} 讀取股票數量：{len(tickers)} 筆")
+        st.write(f"從 {tickers_file} 讀取股票數量：{len(tickers)} 筆")
 
-def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
-    """更新資料庫，修正日期範圍並添加詳細調試訊息"""
-    if repo is None:
-        logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
-        st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
-        return False
-
-    try:
+        # 連接到資料庫
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-        
+
         # 確保表存在
         cursor.execute('''CREATE TABLE IF NOT EXISTS stocks (
             Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
             PRIMARY KEY (Date, Ticker))''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
-        
-        logger.info(f"更新資料庫，檢查所有股票：{len(tickers)} 筆")
-        st.write(f"更新資料庫，檢查所有股票：{len(tickers)} 筆")
-        
-        # 使用美國東部時間計算當前日期
-        current_date_et = datetime.now(US_EASTERN).date()
-        end_date = current_date_et  # 結束日期為今天（ET）
-        
-        # 檢查 metadata 是否有記錄
-        cursor.execute("SELECT last_updated FROM metadata")
-        last_updated = cursor.fetchone()
-        
-        if last_updated:
-            try:
-                last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d %H:%M:%S').date()
-            except ValueError:
-                last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d').date()
-            st.write(f"上次更新日期：{last_updated_date} (美國東部時間)")
-        else:
-            schedule = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date)
-            if schedule.empty:
-                logger.error("NASDAQ 日曆無效，無法確定交易日")
-                st.error("NASDAQ 日曆無效，無法更新資料庫")
-                return False
-            last_updated_date = schedule.index[0].date()
-            st.write(f"無上次更新記錄，從 180 天前開始：{last_updated_date} (美國東部時間)")
-        
-        # 設置開始日期為上次更新後的第一天
-        start_date = last_updated_date + timedelta(days=1)
-        if start_date >= end_date:
-            logger.info("無新交易日數據可更新，已跳過")
-            st.write("無新交易日數據可更新，已跳過")
-            conn.close()
-            return False
-        
-        schedule = nasdaq.schedule(start_date=start_date, end_date=end_date)
-        if schedule.empty:
-            logger.info("無新交易日數據，已跳過更新")
-            st.write("無新交易日數據，已跳過更新")
-            conn.close()
-            return False
-        
-        logger.info(f"更新資料庫，日期範圍：{start_date} 至 {end_date} (美國東部時間)")
-        st.write(f"更新資料庫，日期範圍：{start_date} 至 {end_date} (美國東部時間)")
-        
+
+        # 查詢現有股票及其交易日數
         ticker_days = pd.read_sql_query("SELECT Ticker, COUNT(DISTINCT Date) as days FROM stocks GROUP BY Ticker", conn)
         existing_tickers = {row['Ticker']: row['days'] for _, row in ticker_days.iterrows()}
         
+        logger.info(f"資料庫中已有股票數量：{len(existing_tickers)} 筆")
+        st.write(f"調試：資料庫中已有股票數量：{len(existing_tickers)} 筆")
+
+        # 檢查數據完整性並識別需要下載的股票
         tickers_to_download = []
-        new_ticker_count = 0
+        missing_tickers = []
+        insufficient_tickers = []
+        complete_tickers = 0
+        
         for ticker in tickers:
-            if ticker in existing_tickers and existing_tickers[ticker] >= MIN_TRADING_DAYS:
-                logger.info(f"股票 {ticker} 已有多於 {MIN_TRADING_DAYS} 天的數據，跳過")
-                st.write(f"股票 {ticker} 已有多於 {MIN_TRADING_DAYS} 天的數據，跳過")
-                continue
-            if new_ticker_count >= MAX_NEW_TICKERS_PER_UPDATE:
-                break
-            tickers_to_download.append(ticker)
-            new_ticker_count += 1
-        
+            if ticker not in existing_tickers:
+                missing_tickers.append(ticker)
+                tickers_to_download.append(ticker)
+                logger.info(f"股票 {ticker} 在資料庫中無數據，將下載")
+                st.write(f"調試：股票 {ticker} 在資料庫中無數據，將下載")
+            elif existing_tickers[ticker] < MIN_TRADING_DAYS:
+                insufficient_tickers.append((ticker, existing_tickers[ticker]))
+                tickers_to_download.append(ticker)
+                logger.info(f"股票 {ticker} 數據不足，僅有 {existing_tickers[ticker]} 天，將下載補充")
+                st.write(f"調試：股票 {ticker} 數據不足，僅有 {existing_tickers[ticker]} 天，將下載補充")
+            else:
+                complete_tickers += 1
+
+        # 報告數據狀態
+        logger.info(f"完整數據股票數（>= {MIN_TRADING_DAYS} 天）：{complete_tickers}")
+        st.write(f"完整數據股票數（>= {MIN_TRADING_DAYS} 天）：{complete_tickers}")
+        if missing_tickers:
+            logger.info(f"缺少數據的股票數：{len(missing_tickers)}，清單：{missing_tickers}")
+            st.write(f"缺少數據的股票數：{len(missing_tickers)}，清單：{missing_tickers}")
+        if insufficient_tickers:
+            logger.info(f"數據不足的股票數：{len(insufficient_tickers)}，清單：{[(t, d) for t, d in insufficient_tickers]}")
+            st.write(f"數據不足的股票數：{len(insufficient_tickers)}，清單：{[(t, d) for t, d in insufficient_tickers]}")
+
+        # 若無需下載，結束
         if not tickers_to_download:
-            logger.info("無需下載新股票，已達限制或所有股票已有足夠數據")
-            st.write("無需下載新股票，已達限制或所有股票已有足夠數據")
+            logger.info("所有股票已有足夠數據，無需下載")
+            st.write("所有股票已有足夠數據，無需下載")
             conn.close()
+            return True
+
+        # 設定下載日期範圍（過去 180 天到昨天）
+        current_date_et = datetime.now(US_EASTERN).date()
+        end_date = current_date_et - timedelta(days=1)  # 昨天
+        start_date = end_date - timedelta(days=180)  # 過去 180 天
+        schedule = nasdaq.schedule(start_date=start_date, end_date=end_date)
+        if schedule.empty:
+            logger.error("NASDAQ 日曆無效，無法確定交易日")
+            st.error("NASDAQ 日曆無效，無法更新資料庫")
             return False
+        start_date = schedule.index[0].date()
+        end_date = schedule.index[-1].date()
         
-        logger.info(f"需下載的股票：{tickers_to_download}")
-        st.write(f"需下載的股票：{tickers_to_download}")
-        
+        logger.info(f"下載補充數據，日期範圍：{start_date} 至 {end_date}")
+        st.write(f"調試：下載補充數據，日期範圍：{start_date} 至 {end_date}")
+
+        # 分批下載並更新資料庫
         total_batches = (len(tickers_to_download) + batch_size - 1) // batch_size
         initial_file_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
         logger.info(f"開始更新前 stocks.db 大小：{initial_file_size} bytes")
@@ -448,8 +324,9 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             push_to_github(repo, f"Updated batch {batch_num}/{total_batches} of stock data")
             time.sleep(5)
         
+        # 更新 metadata
         cursor.execute("UPDATE metadata SET last_updated = ?", (end_date.strftime('%Y-%m-%d'),))
-        if not last_updated:
+        if not pd.read_sql_query("SELECT COUNT(*) FROM metadata", conn).iloc[0, 0]:
             cursor.execute("INSERT INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
         conn.commit()
         final_file_size = os.path.getsize(DB_PATH)
@@ -462,6 +339,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         logger.info("資料庫更新完成")
         st.write("資料庫更新完成")
         return True
+
     except Exception as e:
         logger.error(f"資料庫更新失敗：{str(e)}")
         st.error(f"資料庫更新失敗：{str(e)}")
@@ -490,110 +368,8 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
         st.error(f"提取股票數據失敗，股票：{tickers}，錯誤：{str(e)}")
         return None
 
-def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
-    """擴展 S&P 500 股票數據，檢查130個交易日數據，每次最多新增100個新股票，使用美國東部時間"""
-    if repo is None:
-        logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
-        st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
-        return False
-
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # 確保表存在
-        cursor.execute('''CREATE TABLE IF NOT EXISTS stocks (
-            Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
-            PRIMARY KEY (Date, Ticker))''')
-        cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
-        
-        logger.info(f"檢查 S&P 500 股票：{len(tickers_sp500)} 筆")
-        st.write(f"檢查 S&P 500 股票：{len(tickers_sp500)} 筆")
-        
-        end_date = datetime.now(US_EASTERN).date() - timedelta(days=1)
-        start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
-        
-        # 檢查現有股票及其交易日數
-        ticker_days = pd.read_sql_query("SELECT Ticker, COUNT(DISTINCT Date) as days FROM stocks GROUP BY Ticker", conn)
-        existing_tickers = {row['Ticker']: row['days'] for _, row in ticker_days.iterrows()}
-        
-        tickers_to_download = []
-        new_ticker_count = 0
-        for ticker in tickers_sp500:
-            if ticker in existing_tickers and existing_tickers[ticker] >= MIN_TRADING_DAYS:
-                logger.info(f"股票 {ticker} 已有多於 {MIN_TRADING_DAYS} 天的數據，跳過")
-                st.write(f"股票 {ticker} 已有多於 {MIN_TRADING_DAYS} 天的數據，跳過")
-                continue
-            if new_ticker_count >= MAX_NEW_TICKERS_PER_UPDATE:
-                break
-            tickers_to_download.append(ticker)
-            new_ticker_count += 1
-        
-        if not tickers_to_download:
-            logger.info(f"無需下載新 S&P 500 股票，已達限制或所有股票已有足夠數據")
-            st.write(f"無需下載新 S&P 500 股票，已達限制或所有股票已有足夠數據")
-            conn.close()
-            return False
-        
-        st.write(f"檢測到 {len(tickers_to_download)} 隻 S&P 500 股票需下載，股票：{tickers_to_download}")
-        logger.info(f"補充 S&P 500 股票，日期範圍：{start_date} 至 {end_date} (美國東部時間)")
-        st.write(f"補充 S&P 500 股票，日期範圍：{start_date} 至 {end_date} (美國東部時間)")
-        
-        total_batches = (len(tickers_to_download) + batch_size - 1) // batch_size
-        for i in range(0, len(tickers_to_download), batch_size):
-            batch_tickers = tickers_to_download[i:i + batch_size]
-            batch_num = i // batch_size + 1
-            st.write(f"補充 S&P 500：下載批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票：{batch_tickers})")
-            
-            data = download_with_retry(batch_tickers, start=start_date, end=end_date)
-            if data is None:
-                logger.warning(f"批次 {batch_num} 下載失敗，跳過：{batch_tickers}")
-                continue
-            
-            df = data.reset_index()
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in df.columns]
-            
-            tickers_in_batch = list({col.split('_')[0] for col in df.columns if '_' in col})
-            all_data = []
-            for ticker in tickers_in_batch:
-                ticker_cols = [col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']
-                ticker_df = df[ticker_cols].copy()
-                ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
-                ticker_df['Ticker'] = ticker
-                all_data.append(ticker_df)
-            
-            pivoted_df = pd.concat(all_data, ignore_index=True)
-            pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
-            
-            for _, row in pivoted_df.iterrows():
-                cursor.execute('''INSERT OR IGNORE INTO stocks 
-                    (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
-                    str(row['Date']), str(row['Ticker']),
-                    float(row['Open']) if pd.notna(row['Open']) else None,
-                    float(row['High']) if pd.notna(row['High']) else None,
-                    float(row['Low']) if pd.notna(row['Low']) else None,
-                    float(row['Close']) if pd.notna(row['Close']) else None,
-                    float(row['Close']) if pd.notna(row['Close']) else None,
-                    int(row['Volume']) if pd.notna(row['Volume']) else 0))
-            
-            conn.commit()
-            if batch_num % 10 == 0 or batch_num == total_batches:
-                push_to_github(repo, f"Extended S&P 500 with {batch_num} batches")
-            time.sleep(5)
-        
-        cursor.execute("UPDATE metadata SET last_updated = ?", (end_date.strftime('%Y-%m-%d'),))
-        if not cursor.fetchone():
-            cursor.execute("INSERT INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
-        conn.commit()
-        push_to_github(repo, "Final S&P 500 extension")
-        conn.close()
-        
-        logger.info("S&P 500 股票補充完成")
-        st.write("S&P 500 股票補充完成")
-        return True
-    except Exception as e:
-        logger.error(f"S&P 500 股票補充失敗：{str(e)}")
-        st.error(f"S&P 500 股票補充失敗：{str(e)}")
-        return False
+# 主程式
+if __name__ == "__main__":
+    repo = init_repo()
+    if repo:
+        update_database(repo=repo)
