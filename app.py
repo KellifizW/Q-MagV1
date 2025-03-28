@@ -4,10 +4,12 @@ from screening import screen_stocks, fetch_stock_data, get_nasdaq_100, get_sp500
 from visualize import plot_top_5_stocks, plot_breakout_stocks
 from database import init_repo, update_database  # 只匯入必要的函數
 from datetime import datetime, timedelta
+from database import main as init_database_module
+
+init_database_module()
 
 st.title("Qullamaggie Breakout Screener")
 
-# 簡介與參考
 st.markdown("""
 ### 簡介
 本程式基於 Qullamaggie Breakout 策略篩選股票，參考方法來自 [Reddit: Trade Like a Professional - Breakout Swing Trading](https://www.reddit.com/r/wallstreetbetsOGs/comments/om7h73/trade_like_a_professional_breakout_swing_trading/)。
@@ -55,11 +57,12 @@ if st.sidebar.button("重置篩選"):
         del st.session_state[key]
     st.rerun()
 
-# 初始化 Git 倉庫並更新資料庫
-repo = init_repo()
-if repo:
-    # 從 Tickers.csv 讀取所有股票代碼並更新資料庫
-    update_database(repo=repo)
+# 手動初始化 Git 倉庫並更新資料庫
+if st.button("初始化並更新資料庫"):
+    from database import init_repo, update_database
+    repo = init_repo()
+    if repo:
+        update_database(repo=repo)
 
 # 處理股票池選擇和篩選
 if submit_button:
