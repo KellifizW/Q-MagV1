@@ -28,7 +28,6 @@ def get_nasdaq_all(csv_tickers):
     return csv_tickers
 
 def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5):
-    """批量分析股票數據，返回符合條件的結果"""
     results = []
     failed_stocks = {}
     matched_count = 0
@@ -53,17 +52,19 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                 failed_stocks[ticker] = f"數據不足或無效，長度 {len(close)}，需 {required_days}"
                 continue
             
+            # 檢查有效數據點數
+            valid_close_count = close.notna().sum()
+            if valid_close_count < 67:
+                failed_stocks[ticker] = f"有效數據點不足（僅 {valid_close_count} 天，需至少 67 天），總長度 {len(close)}"
+                continue
+            
             close_shift_22 = close.shift(22)
             close_shift_67 = close.shift(67)
             rise_22 = (close / close_shift_22 - 1) * 100
             rise_67 = (close / close_shift_67 - 1) * 100
             
-            if not isinstance(rise_22, pd.Series) or not isinstance(rise_67, pd.Series):
-                failed_stocks[ticker] = f"rise_22 或 rise_67 不是 Series，類型: {type(rise_22)}, {type(rise_67)}"
-                continue
-            
             if rise_22.isna().all() or rise_67.isna().all():
-                failed_stocks[ticker] = f"無法計算漲幅，數據長度不足（需至少 67 天，現有 {len(close)} 天）"
+                failed_stocks[ticker] = f"無法計算漲幅，可能因數據缺失，總長度 {len(close)}，有效數據點 {valid_close_count}"
                 continue
             
             recent_high = close.rolling(consol_days).max()
