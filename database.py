@@ -25,6 +25,7 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
     # 首先嘗試 yfinance
     for attempt in range(retries):
         try:
+            raise Exception("強制 yfinance 失敗")
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
                 logger.warning(f"批次數據為空，股票：{tickers}")
