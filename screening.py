@@ -37,6 +37,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         try:
             # 使用 xs 處理多層索引
             stock = data.xs(ticker, level='Ticker', axis=1)
+            st.write(f"調試 {ticker} - stock 類型: {type(stock)}, 長度: {len(stock)}")
             if stock['Close'].isna().all() or len(stock) < required_days:
                 failed_stocks[ticker] = f"數據不足或無效，長度 {len(stock)}，需 {required_days}"
                 continue
@@ -48,9 +49,17 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             prev_close = close.shift(1)
             dates = stock.index
             
-            # 確保 shift 返回數值序列
-            rise_22 = (close / close.shift(22) - 1) * 100
-            rise_67 = (close / close.shift(67) - 1) * 100
+            st.write(f"調試 {ticker} - close 類型: {type(close)}, 長度: {len(close)}")
+            
+            # 計算漲幅並檢查類型
+            shift_22 = close.shift(22)
+            shift_67 = close.shift(67)
+            st.write(f"調試 {ticker} - shift_22 類型: {type(shift_22)}, shift_67 類型: {type(shift_67)}")
+            
+            rise_22 = (close / shift_22 - 1) * 100
+            rise_67 = (close / shift_67 - 1) * 100
+            st.write(f"調試 {ticker} - rise_22 類型: {type(rise_22)}, rise_67 類型: {type(rise_67)}")
+            
             if rise_22.isna().all() or rise_67.isna().all():
                 failed_stocks[ticker] = f"無法計算漲幅，數據長度不足（需至少 67 天，現有 {len(stock)} 天）"
                 continue
@@ -63,6 +72,8 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             adr = daily_range.rolling(prior_days).mean() * 100
             breakout = (close > recent_high.shift(1)) & (close.shift(1) <= recent_high.shift(1))
             breakout_volume = volume > volume.rolling(10).mean() * 1.5
+            
+            st.write(f"調試 {ticker} - mask 計算前檢查: rise_22 示例值: {rise_22.iloc[-1] if not rise_22.isna().all() else '全為 NaN'}")
             
             mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & \
                    (consolidation_range <= max_range) & (adr >= min_adr)
