@@ -121,7 +121,7 @@ def push_to_github(repo, message="Update stocks.db"):
             return True
 
         subprocess.run(['git', 'commit', '-m', message], check=True, capture_output=True, text=True)
-        token = st.secrets["TOKEN"]
+        token = ["TOKEN"]
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
         subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
@@ -134,7 +134,7 @@ def init_database():
     """從 GitHub 下載初始資料庫或創建新資料庫"""
     if 'db_initialized' not in st.session_state:
         try:
-            token = st.secrets["TOKEN"]
+            token = ["TOKEN"]
             url = "https://raw.githubusercontent.com/KellifizW/Q-MagV1/main/stocks.db"
             response = requests.get(url, headers={"Authorization": f"token {token}"})
             if response.status_code == 200:
@@ -155,9 +155,7 @@ def init_database():
             st.error(f"初始化資料庫失敗：{str(e)}")
             st.session_state['db_initialized'] = False
 
-def update_database(api_key = st.secrets.get("ALPHA_VANTAGE_API_KEY", None),
-                    data = download_with_retry(batch_tickers, start=start_date, end=end_date, api_key=api_key),
-                    tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None, check_percentage=0.1, lookback_days=30):
+def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None, check_percentage=0.1, lookback_days=30):
     """增量更新資料庫，包含完整性檢查"""
     if repo is None:
         st.error("未提供 Git 倉庫物件")
@@ -217,6 +215,8 @@ def update_database(api_key = st.secrets.get("ALPHA_VANTAGE_API_KEY", None),
                 return True
 
         # 分批下載並更新
+        api_key = st.secrets.get("ALPHA_VANTAGE_API_KEY", None)
+        data = download_with_retry(batch_tickers, start=start_date, end=end_date, api_key=api_key)
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
         for i in range(0, len(tickers_to_update), batch_size):
             batch_tickers = tickers_to_update[i:i + batch_size]
