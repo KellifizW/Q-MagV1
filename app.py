@@ -73,7 +73,7 @@ if submit_button:
     elif index_option == "S&P 500":
         tickers = get_sp500()
     else:
-        tickers = get_nasdaq_all()[:max_stocks]
+        tickers = get_nasdaq_all(csv_tickers="Tickers.csv")[:max_stocks]
     st.session_state['tickers'] = tickers
     
     # 篩選邏輯
