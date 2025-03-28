@@ -20,13 +20,12 @@ TICKERS_CSV = "Tickers.csv"
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 20
-INITIAL_CHECK_PERCENTAGE = 0.10  # 檢查 10% 股票
 
 def download_with_retry(tickers, start, end, retries=2, delay=5):
-    """簡化版帶重試的股票數據下載"""
+    """簡化版帶重試的股票數據下載，移除多線程"""
     for attempt in range(retries):
         try:
-            data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False, threads=True)
+            data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
                 logger.warning(f"批次數據為空，股票：{tickers}")
                 continue
@@ -82,14 +81,13 @@ def push_to_github(repo, message="Update stocks.db"):
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
         subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
-        st.success(f"已成功推送至 GitHub: {message}")
         return True
     except Exception as e:
         st.error(f"推送至 GitHub 失敗：{str(e)}")
         return False
 
 def init_database():
-    """從 GitHub 下載初始資料庫或創建新資料邊"""
+    """從 GitHub 下載初始資料庫或創建新資料庫"""
     if 'db_initialized' not in st.session_state:
         try:
             token = st.secrets["TOKEN"]
@@ -113,7 +111,7 @@ def init_database():
             st.error(f"初始化資料庫失敗：{str(e)}")
             st.session_state['db_initialized'] = False
 
-def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None):
+def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None, check_percentage=0.10):
     """增量更新資料庫，包含完整性檢查"""
     if repo is None:
         st.error("未提供 Git 倉庫物件")
@@ -144,8 +142,8 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
         existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date']).dt.date))
 
-        # 檢查完整性：從最後 10% 股票開始檢查
-        num_to_check = max(1, int(len(tickers) * INITIAL_CHECK_PERCENTAGE))
+        # 檢查完整性：根據指定比例從末尾開始檢查
+        num_to_check = max(1, int(len(tickers) * check_percentage))
         tickers_to_check = tickers[-num_to_check:]
         tickers_to_update = []
         start_date = end_date - timedelta(days=180)
@@ -210,11 +208,34 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         conn.commit()
         conn.close()
 
-        # 提供推送選項
-        if st.button("推送至 GitHub"):
-            push_to_github(repo, f"Updated stocks.db with new data")
+        # 推送至 GitHub 並顯示結果
+        push_success = push_to_github(repo, f"Updated stocks.db with new data")
+        if push_success:
+            st.success("資料庫更新完成並成功推送至 GitHub")
+        else:
+            st.warning("資料庫更新完成，但推送至 GitHub 失敗")
         
-        st.write("資料庫更新完成")
+        # 提供手動推送和下載選項
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("手動推送至 GitHub"):
+                manual_push_success = push_to_github(repo, "Manual push after update")
+                if manual_push_success:
+                    st.success("手動推送至 GitHub 成功")
+                else:
+                    st.error("手動推送至 GitHub 失敗")
+        with col2:
+            if os.path.exists(DB_PATH):
+                with open(DB_PATH, "rb") as file:
+                    st.download_button(
+                        label="下載 stocks.db",
+                        data=file,
+                        file_name="stocks.db",
+                        mime="application/octet-stream"
+                    )
+            else:
+                st.error("stocks.db 不存在，無法下載")
+        
         return True
 
     except Exception as e:
@@ -226,6 +247,9 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
     """從資料庫提取股票數據"""
     try:
+        if not os.path.exists(db_path):
+            st.error(f"資料庫檔案 {db_path} 不存在，請先初始化或更新資料庫")
+            return None
         conn = sqlite3.connect(db_path)
         start_date = (datetime.now(US_EASTERN).date() - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
         query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?']*len(tickers))}) AND Date >= ?"
@@ -251,12 +275,23 @@ def main():
     # 初始化資料庫（僅首次執行）
     init_database()
 
-    # 提供手動更新按鈕，避免每次交互都更新
+    # 提供檢查比例選擇和更新按鈕
+    check_percentage = st.slider("檢查和更新比例 (%)", 0, 100, 10, help="選擇要檢查和更新的股票比例（從末尾開始）") / 100.0
+
     if st.button("更新資料庫"):
         if st.session_state.get('repo_initialized', False):
-            update_database(repo=st.session_state['repo'])
+            update_database(repo=st.session_state['repo'], check_percentage=check_percentage)
         else:
             st.error("Git 倉庫未初始化，無法更新資料庫")
+
+    if st.button("初始化並更新資料庫"):
+        repo = init_repo()
+        if repo:
+            st.session_state['repo_initialized'] = True
+            st.session_state['repo'] = repo
+            update_database(repo=repo, check_percentage=check_percentage)
+        else:
+            st.error("Git 倉庫初始化失敗，無法更新資料庫")
 
 if __name__ == "__main__":
     main()
