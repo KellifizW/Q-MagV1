@@ -62,7 +62,7 @@ def init_repo():
         return None
 
 def push_to_github(repo, message="Update stocks.db"):
-    """單次推送變更到 GitHub，若失敗則提供下載選項"""
+    """單次推送變更到 GitHub"""
     try:
         os.chdir(REPO_DIR)
         logger.info(f"準備推送至 GitHub，訊息：{message}")
@@ -73,7 +73,6 @@ def push_to_github(repo, message="Update stocks.db"):
             st.error(f"stocks.db 不存在於路徑：{DB_PATH}")
             return False
 
-        # 添加並檢查變更
         subprocess.run(['git', 'add', DB_PATH], check=True, capture_output=True, text=True)
         status = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True)
         if not status.stdout:
@@ -81,11 +80,9 @@ def push_to_github(repo, message="Update stocks.db"):
             st.write("調試：無變更需要推送")
             return True
 
-        # 提交變更
         commit_result = subprocess.run(['git', 'commit', '-m', message], check=True, capture_output=True, text=True)
         logger.info(f"提交成功 - stdout: {commit_result.stdout}, stderr: {commit_result.stderr}")
 
-        # 推送
         token = st.secrets["TOKEN"]
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
@@ -96,28 +93,10 @@ def push_to_github(repo, message="Update stocks.db"):
     except subprocess.CalledProcessError as e:
         logger.error(f"Git 操作失敗 - 命令：{e.cmd}, stdout: {e.stdout}, stderr: {e.stderr}")
         st.error(f"推送至 GitHub 失敗：{e.stderr}")
-        # 提供下載選項
-        if os.path.exists(DB_PATH):
-            with open(DB_PATH, "rb") as file:
-                st.download_button(
-                    label="下載當前 stocks.db",
-                    data=file,
-                    file_name="stocks.db",
-                    mime="application/octet-stream"
-                )
         return False
     except Exception as e:
         logger.error(f"推送至 GitHub 發生未知錯誤：{str(e)}")
         st.error(f"推送至 GitHub 發生未知錯誤: {str(e)}")
-        # 提供下載選項
-        if os.path.exists(DB_PATH):
-            with open(DB_PATH, "rb") as file:
-                st.download_button(
-                    label="下載當前 stocks.db",
-                    data=file,
-                    file_name="stocks.db",
-                    mime="application/octet-stream"
-                )
         return False
 
 def download_with_retry(tickers, start, end, retries=5, delay=10):
@@ -136,8 +115,30 @@ def download_with_retry(tickers, start, end, retries=5, delay=10):
     logger.error(f"下載 {tickers} 失敗，已達最大重試次數")
     return None
 
+def get_github_file_info():
+    """查詢 GitHub 上 stocks.db 的檔案資訊"""
+    try:
+        token = st.secrets["TOKEN"]
+        url = "https://api.github.com/repos/KellifizW/Q-MagV1/contents/stocks.db"
+        headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            data = response.json()
+            size = data.get("size", 0) / 1024  # 轉換為 KB
+            last_updated = data.get("sha", "未知")  # 使用 SHA 作為更新標識
+            return {"size_kb": size, "last_updated": last_updated}
+        else:
+            logger.warning(f"無法獲取 GitHub 檔案資訊，狀態碼：{response.status_code}")
+            st.write(f"調試：無法獲取 GitHub 檔案資訊，狀態碼：{response.status_code}")
+            return None
+    except Exception as e:
+        logger.error(f"查詢 GitHub 檔案資訊失敗：{str(e)}")
+        st.write(f"調試：查詢 GitHub 檔案資訊失敗：{str(e)}")
+        return None
+
 def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None):
-    """增量更新資料庫並提供中斷下載選項，首次檢查 10% 股票"""
+    """增量更新資料庫，結束後提供下載與 GitHub 資訊"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件")
         st.error("未提供 Git 倉庫物件")
@@ -173,102 +174,93 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
         # 確定需要更新的股票（首次檢查 10%）
         current_date_et = datetime.now(US_EASTERN).date()
-        end_date = current_date_et - timedelta(days=1)  # 昨天
-        tickers_to_check = tickers[:max(1, int(len(tickers) * INITIAL_CHECK_PERCENTAGE))]  # 檢查 10%
+        end_date = current_date_et - timedelta(days=1)
+        tickers_to_check = tickers[:max(1, int(len(tickers) * INITIAL_CHECK_PERCENTAGE))]
         tickers_to_update = []
         for ticker in tickers_to_check:
             last_date = existing_tickers.get(ticker)
-            if not last_date or (end_date - last_date.date()).days > 0:
+            if not last_date:
                 tickers_to_update.append(ticker)
-            elif (end_date - last_date.date()).days + MIN_TRADING_DAYS > 180:
-                tickers_to_update.append(ticker)  # 若數據不足 130 天，重新下載
+                continue
+            days_missing = (end_date - last_date.date()).days
+            if days_missing > 0:
+                tickers_to_update.append(ticker)
+            elif days_missing + MIN_TRADING_DAYS > 180:
+                tickers_to_update.append(ticker)
 
         if not tickers_to_update:
-            logger.info("測試範圍內所有股票數據已是最新，無需更新")
-            st.write("測試範圍內所有股票數據已是最新，無需更新")
-            conn.close()
-            return True
+            logger.info("測試範圍內股票數據已是最新，無需更新")
+            st.write("測試範圍內股票數據已是最新，無需更新")
 
         logger.info(f"需更新的股票數量（10% 測試）：{len(tickers_to_update)}")
         st.write(f"需更新的股票數量（10% 測試）：{len(tickers_to_update)}")
 
         # 分批更新
-        total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
+        total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size if tickers_to_update else 0
         rows_inserted_total = 0
-        for i in range(0, len(tickers_to_update), batch_size):
-            batch_tickers = tickers_to_update[i:i + batch_size]
-            batch_num = i // batch_size + 1
-            st.write(f"更新：處理批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票)")
+        if tickers_to_update:
+            for i in range(0, len(tickers_to_update), batch_size):
+                batch_tickers = tickers_to_update[i:i + batch_size]
+                batch_num = i // batch_size + 1
+                st.write(f"更新：處理批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票)")
 
-            # 計算該批次的開始日期
-            batch_start_dates = {t: existing_tickers.get(t, end_date - timedelta(days=180)) for t in batch_tickers}
-            earliest_start = min(batch_start_dates.values()).date()
-            schedule = nasdaq.schedule(start_date=earliest_start, end_date=end_date)
-            if schedule.empty:
-                logger.error("NASDAQ 日曆無效")
-                continue
-            start_date = schedule.index[0].date()
+                batch_start_dates = {t: existing_tickers.get(t, end_date - timedelta(days=180)) for t in batch_tickers}
+                earliest_start = min(batch_start_dates.values()).date()
+                schedule = nasdaq.schedule(start_date=earliest_start, end_date=end_date)
+                if schedule.empty:
+                    logger.error("NASDAQ 日曆無效")
+                    continue
+                start_date = schedule.index[0].date()
 
-            # 下載數據
-            data = download_with_retry(batch_tickers, start=start_date, end=end_date)
-            if data is None:
-                logger.warning(f"批次 {batch_num} 下載失敗，提供當前 stocks.db 下載")
-                st.error(f"批次 {batch_num} 下載失敗，已中斷更新")
-                if os.path.exists(DB_PATH):
-                    with open(DB_PATH, "rb") as file:
-                        st.download_button(
-                            label="下載當前 stocks.db（中斷時）",
-                            data=file,
-                            file_name="stocks.db",
-                            mime="application/octet-stream"
-                        )
-                conn.close()
-                return False
+                data = download_with_retry(batch_tickers, start=start_date, end=end_date)
+                if data is None:
+                    logger.warning(f"批次 {batch_num} 下載失敗")
+                    st.write(f"批次 {batch_num} 下載失敗")
+                    continue
 
-            # 處理並插入數據
-            df = data.reset_index()
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in df.columns]
-            
-            all_data = []
-            for ticker in batch_tickers:
-                ticker_cols = [col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']
-                ticker_df = df[ticker_cols].copy()
-                ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
-                ticker_df['Ticker'] = ticker
-                if ticker in existing_tickers:
-                    ticker_df = ticker_df[pd.to_datetime(ticker_df['Date']) > existing_tickers[ticker]]
-                all_data.append(ticker_df)
+                df = data.reset_index()
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in df.columns]
+                
+                all_data = []
+                for ticker in batch_tickers:
+                    ticker_cols = [col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']
+                    ticker_df = df[ticker_cols].copy()
+                    ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
+                    ticker_df['Ticker'] = ticker
+                    if ticker in existing_tickers:
+                        ticker_df = ticker_df[pd.to_datetime(ticker_df['Date']) > existing_tickers[ticker]]
+                    all_data.append(ticker_df)
 
-            if not all_data:
-                continue
+                if not all_data:
+                    continue
 
-            pivoted_df = pd.concat(all_data, ignore_index=True)
-            pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
+                pivoted_df = pd.concat(all_data, ignore_index=True)
+                pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
 
-            for _, row in pivoted_df.iterrows():
-                cursor.execute('''INSERT OR IGNORE INTO stocks 
-                    (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
-                    str(row['Date']), str(row['Ticker']),
-                    float(row['Open']) if pd.notna(row['Open']) else None,
-                    float(row['High']) if pd.notna(row['High']) else None,
-                    float(row['Low']) if pd.notna(row['Low']) else None,
-                    float(row['Close']) if pd.notna(row['Close']) else None,
-                    float(row['Close']) if pd.notna(row['Close']) else None,
-                    int(row['Volume']) if pd.notna(row['Volume']) else 0))
-                rows_inserted_total += cursor.rowcount
+                for _, row in pivoted_df.iterrows():
+                    cursor.execute('''INSERT OR IGNORE INTO stocks 
+                        (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
+                        str(row['Date']), str(row['Ticker']),
+                        float(row['Open']) if pd.notna(row['Open']) else None,
+                        float(row['High']) if pd.notna(row['High']) else None,
+                        float(row['Low']) if pd.notna(row['Low']) else None,
+                        float(row['Close']) if pd.notna(row['Close']) else None,
+                        float(row['Close']) if pd.notna(row['Close']) else None,
+                        int(row['Volume']) if pd.notna(row['Volume']) else 0))
+                    rows_inserted_total += cursor.rowcount
 
-            conn.commit()
-            logger.info(f"批次 {batch_num}/{total_batches} 完成，插入 {rows_inserted_total} 行")
-            st.write(f"調試：批次 {batch_num}/{total_batches} 完成，插入 {rows_inserted_total} 行")
+                conn.commit()
+                logger.info(f"批次 {batch_num}/{total_batches} 完成，插入 {rows_inserted_total} 行")
+                st.write(f"調試：批次 {batch_num}/{total_batches} 完成，插入 {rows_inserted_total} 行")
 
         # 更新 metadata
         cursor.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
         conn.commit()
         conn.close()
 
-        # 單次推送
+        # 推送
         if rows_inserted_total > 0:
             push_success = push_to_github(repo, f"Updated stocks.db with {rows_inserted_total} new rows (10% test)")
             if not push_success:
@@ -277,6 +269,27 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             logger.info("無新數據插入，跳過推送")
             st.write("調試：無新數據插入，跳過推送")
 
+        # 無論成功與否，提供下載按鈕
+        if os.path.exists(DB_PATH):
+            with open(DB_PATH, "rb") as file:
+                st.download_button(
+                    label="下載當前 stocks.db",
+                    data=file,
+                    file_name="stocks.db",
+                    mime="application/octet-stream"
+                )
+        else:
+            st.error("stocks.db 不存在，無法提供下載")
+
+        # 查詢並顯示 GitHub 上的檔案資訊
+        github_info = get_github_file_info()
+        if github_info:
+            st.write(f"GitHub 上 stocks.db 資訊：")
+            st.write(f"- 大小：{github_info['size_kb']:.2f} KB")
+            st.write(f"- 最後更新（SHA）：{github_info['last_updated']}")
+        else:
+            st.write("無法獲取 GitHub 上 stocks.db 的資訊")
+
         logger.info("資料庫更新完成（10% 測試）")
         st.write("資料庫更新完成（10% 測試）")
         return True
@@ -284,7 +297,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
     except Exception as e:
         logger.error(f"資料庫更新失敗：{str(e)}")
         st.error(f"資料庫更新失敗：{str(e)}")
-        # 提供下載選項
+        # 提供下載按鈕
         if os.path.exists(DB_PATH):
             with open(DB_PATH, "rb") as file:
                 st.download_button(
@@ -293,6 +306,12 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                     file_name="stocks.db",
                     mime="application/octet-stream"
                 )
+        # 查詢 GitHub 資訊
+        github_info = get_github_file_info()
+        if github_info:
+            st.write(f"GitHub 上 stocks.db 資訊：")
+            st.write(f"- 大小：{github_info['size_kb']:.2f} KB")
+            st.write(f"- 最後更新（SHA）：{github_info['last_updated']}")
         return False
 
 def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
