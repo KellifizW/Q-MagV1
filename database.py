@@ -67,6 +67,8 @@ def ensure_writable(db_path):
     except Exception as e:
         logger.error(f"無法設置 {db_path} 為可寫：{str(e)}")
         st.error(f"無法設置 {db_path} 為可寫：{str(e)}")
+        return False
+    return True
 
 def init_repo():
     """初始化 Git 倉庫"""
@@ -189,14 +191,14 @@ def get_nasdaq_all(csv_tickers=TICKERS_CSV):
         return []
 
 def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None):
-    """增量更新資料庫，顯示推送狀態"""
+    """增量更新資料庫，每次批次前檢查唯讀"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件")
         st.error("未提供 Git 倉庫物件")
         return False
 
     try:
-        # 檢查資料庫是否唯讀
+        # 初始檢查資料庫是否唯讀
         is_readonly = check_readonly(db_path)
         if is_readonly:
             st.error("資料庫為唯讀，無法更新")
@@ -255,7 +257,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         logger.info(f"需更新的股票數量（10% 測試，倒序）：{len(tickers_to_update)}")
         st.write(f"需更新的股票數量（10% 測試，倒序）：{len(tickers_to_update)}")
 
-        # 分批更新
+        # 分批更新，每次批次前檢查唯讀
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size if tickers_to_update else 0
         rows_inserted_total = 0
         if tickers_to_update:
@@ -263,6 +265,16 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 batch_tickers = tickers_to_update[i:i + batch_size]
                 batch_num = i // batch_size + 1
                 st.write(f"更新：處理批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票)")
+
+                # 每次批次前檢查並確保可寫
+                if check_readonly(db_path):
+                    st.error(f"批次 {batch_num} 前發現資料庫唯讀，停止更新")
+                    conn.close()
+                    return False
+                if not ensure_writable(db_path):
+                    st.error(f"無法確保批次 {batch_num} 前資料庫可寫，停止更新")
+                    conn.close()
+                    return False
 
                 batch_start_dates = {t: existing_tickers.get(t, end_date - timedelta(days=180)) for t in batch_tickers}
                 earliest_start = min(batch_start_dates.values())
