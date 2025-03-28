@@ -93,7 +93,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
 
 def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5, progress_bar=None):
     """主篩選函數，從 SQLite 查詢數據"""
-    data = fetch_stock_data(tickers, stock_pool)
+    data = fetch_stock_data(tickers, trading_days=70)
     if data is None:
         st.error("無法從資料庫獲取數據")
         return pd.DataFrame()
