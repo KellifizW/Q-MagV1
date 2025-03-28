@@ -98,10 +98,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                          f"ADR = {adr.iloc[-1]:.2f}%")
             else:
                 unmatched_count += 1
-                st.write(f"股票 {ticker} 不符合條件：22 日漲幅 = {rise_22.iloc[-1]:.2f}% (需 >= {min_rise_22}), "
-                         f"67 日漲幅 = {rise_67.iloc[-1]:.2f}% (需 >= {min_rise_67}), "
-                         f"盤整範圍 = {consolidation_range.iloc[-1]:.2f}% (需 <= {max_range}), "
-                         f"ADR = {adr.iloc[-1]:.2f}% (需 >= {min_adr})")
                 
         except Exception as e:
             failed_stocks[ticker] = f"分析失敗：{str(e)}"
