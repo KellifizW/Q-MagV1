@@ -154,7 +154,9 @@ def init_database():
             st.error(f"初始化資料庫失敗：{str(e)}")
             st.session_state['db_initialized'] = False
 
-def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None, check_percentage=0.1, lookback_days=30):
+def update_database(api_key = st.secrets.get("ALPHA_VANTAGE_API_KEY", None),
+                    data = download_with_retry(batch_tickers, start=start_date, end=end_date, api_key=api_key),
+                    tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None, check_percentage=0.1, lookback_days=30):
     """增量更新資料庫，包含完整性檢查"""
     if repo is None:
         st.error("未提供 Git 倉庫物件")
