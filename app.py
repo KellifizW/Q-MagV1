@@ -1,37 +1,11 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
-from screening import screen_stocks, get_nasdaq_100, get_sp500, get_nasdaq_all
+from screening import screen_stocks, fetch_stock_data, get_nasdaq_100, get_sp500, get_nasdaq_all
 from visualize import plot_top_5_stocks, plot_breakout_stocks
-from database import init_repo, push_to_github, initialize_database, update_database
-import os
-from datetime import datetime
-
-DB_PATH = "./stocks.db"
-
-# 檢查 stocks.db 是否存在並顯示基本信息
-if os.path.exists(DB_PATH):
-    st.write(f"找到 stocks.db，檔案大小：{os.path.getsize(DB_PATH)} bytes")
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-    tables = cursor.fetchall()
-    st.write("資料庫中的表：", tables)
-    if tables:
-        for table in tables:
-            table_name = table[0]
-            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-            row_count = cursor.fetchone()[0]
-            st.write(f"表 {table_name} 中的記錄數：{row_count}")
-    conn.close()
-else:
-    st.error("stocks.db 不存在！")
+from database import init_repo, update_database  # 只匯入必要的函數
+from datetime import datetime, timedelta
 
 st.title("Qullamaggie Breakout Screener")
-
-# 配置
-REPO_DIR = "."  # Streamlit Cloud 中，檔案位於應用根目錄
-DB_PATH = os.path.join(REPO_DIR, "stocks.db")  # 即 ./stocks.db
 
 # 簡介與參考
 st.markdown("""
@@ -59,65 +33,7 @@ st.markdown("""
   - 最小 ADR：2%
 """)
 
-# 初始化現有的 Git 倉庫
-repo = init_repo()
-if repo is None:
-    st.error("無法初始化 GitHub 倉庫，請檢查 TOKEN 配置或倉庫設置")
-    st.stop()
-
-# 讀取 tickers.csv
-try:
-    tickers_df = pd.read_csv("tickers.csv")  # 直接讀取根目錄下的 tickers.csv
-    csv_tickers = tickers_df['Ticker'].tolist()
-except FileNotFoundError:
-    st.error("找不到 tickers.csv，請確保該檔案已上傳至 GitHub 倉庫根目錄")
-    st.stop()
-
-# 資料庫初始化與更新邏輯
-if not os.path.exists(DB_PATH):
-    st.write("初始化資料庫...")
-    if initialize_database(csv_tickers, repo=repo):
-        push_to_github(repo, "Initial stocks.db creation")
-    else:
-        st.error("初始化資料庫失敗，無法繼續操作")
-else:
-    st.write("更新資料庫...")
-    if update_database(csv_tickers, repo=repo):
-        push_to_github(repo, f"Daily update: {datetime.now().strftime('%Y-%m-%d')}")
-
-# 新增功能 1：檢查股票池
-def check_stock_pool(tickers_to_check):
-    """檢查 stocks.db 是否包含指定股票池的數據"""
-    conn = sqlite3.connect(DB_PATH)
-    existing_tickers = pd.read_sql_query("SELECT DISTINCT Ticker FROM stocks", conn)['Ticker'].tolist()
-    conn.close()
-    
-    missing_tickers = [ticker for ticker in tickers_to_check if ticker not in existing_tickers]
-    present_tickers = [ticker for ticker in tickers_to_check if ticker in existing_tickers]
-    
-    st.write(f"股票池總數：{len(tickers_to_check)} 隻股票")
-    st.write(f"已在 stocks.db 中的股票數：{len(present_tickers)} 隻")
-    st.write(f"缺失的股票數：{len(missing_tickers)} 隻")
-    if missing_tickers:
-        st.write(f"缺失的股票（前 10 個）：{missing_tickers[:10]}")
-    else:
-        st.success("所有股票數據均存在於 stocks.db 中！")
-
-# 新增功能 2：強制重新下載
-def force_redownload(tickers, repo):
-    """強制重新下載所有 tickers.csv 中的股票數據"""
-    with st.spinner("正在強制重新下載所有股票數據..."):
-        success = initialize_database(tickers, repo=repo)
-        if success:
-            push_success = push_to_github(repo, f"Forced re-download: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            if push_success:
-                st.success("已完成強制重新下載並更新 stocks.db！")
-            else:
-                st.error("資料庫重新下載成功，但推送至 GitHub 失敗，請檢查 GitHub 配置")
-        else:
-            st.error("強制重新下載失敗，請檢查日誌或網絡連接")
-
-# 用戶輸入參數
+# 用戶輸入參數（使用 st.form）
 with st.sidebar.form(key="screening_form"):
     st.header("篩選參數")
     index_option = st.selectbox("選擇股票池", ["NASDAQ 100", "S&P 500", "NASDAQ All"])
@@ -133,42 +49,37 @@ with st.sidebar.form(key="screening_form"):
     max_stocks = st.slider("最大篩選股票數量", 10, 500, 50, help="限制股票數量以加快處理速度，僅適用於 NASDAQ All")
     submit_button = st.form_submit_button("運行篩選")
 
-# 新增按鈕：檢查股票池和強制重新下載
-st.sidebar.subheader("資料庫管理")
-if st.sidebar.button("檢查股票池"):
-    if index_option == "NASDAQ 100":
-        tickers_to_check = get_nasdaq_100(csv_tickers)
-    elif index_option == "S&P 500":
-        tickers_to_check = get_sp500()
-    else:
-        tickers_to_check = get_nasdaq_all(csv_tickers)[:max_stocks]
-    check_stock_pool(tickers_to_check)
-
-if st.sidebar.button("強制重新下載"):
-    force_redownload(csv_tickers, repo)
-
 # 重置按鈕
 if st.sidebar.button("重置篩選"):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
 
-# 篩選邏輯
+# 初始化 Git 倉庫並更新資料庫
+repo = init_repo()
+if repo:
+    # 從 Tickers.csv 讀取所有股票代碼並更新資料庫
+    update_database(repo=repo)
+
+# 處理股票池選擇和篩選
 if submit_button:
+    # 重置篩選結果
     if 'df' in st.session_state:
         del st.session_state['df']
     
+    # 更新 tickers
     if index_option == "NASDAQ 100":
-        tickers = get_nasdaq_100(csv_tickers)
+        tickers = get_nasdaq_100()
     elif index_option == "S&P 500":
         tickers = get_sp500()
     else:
-        tickers = get_nasdaq_all(csv_tickers)[:max_stocks]
+        tickers = get_nasdaq_all()[:max_stocks]
     st.session_state['tickers'] = tickers
     
+    # 篩選邏輯
     with st.spinner("篩選中..."):
         progress_bar = st.progress(0)
-        df = screen_stocks(tickers, index_option, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr, progress_bar)
+        df = screen_stocks(tickers, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr, progress_bar)
         progress_bar.progress(100)
         if 'stock_data' in st.session_state:
             st.write(f"批量數據已載入，涵蓋 {len(st.session_state['stock_data'].columns.get_level_values(1))} 檔股票")
@@ -187,17 +98,22 @@ if submit_button:
 if 'df' in st.session_state:
     df = st.session_state['df']
     st.subheader("篩選結果")
+    # 確保 Date 欄位格式一致
     df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+    # 只顯示最近一天的數據
     latest_date = df['Date'].max()
     latest_df = df[df['Date'] == latest_date].copy()
+    # 添加狀態欄位
     latest_df.loc[:, 'Status'] = latest_df.apply(
         lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume']
         else "已突破但成交量不足" if row['Breakout']
         else "盤整中" if row['Consolidation_Range_%'] < max_range
         else "前段上升", axis=1
     )
+    # 檢查 latest_df 的欄位
     st.write("篩選結果的欄位：", latest_df.columns.tolist())
     
+    # 重命名欄位以更直觀
     display_df = latest_df.rename(columns={
         'Ticker': '股票代碼',
         'Date': '日期',
@@ -210,7 +126,9 @@ if 'df' in st.session_state:
         'Breakout_Volume': '突破成交量'
     })
     
+    # 定義要顯示的欄位
     desired_columns = ['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']
+    # 檢查哪些欄位存在
     available_columns = [col for col in desired_columns if col in display_df.columns]
     missing_columns = [col for col in desired_columns if col not in display_df.columns]
     
@@ -228,18 +146,22 @@ if 'df' in st.session_state:
     else:
         st.error("無可顯示的欄位，請檢查篩選條件或數據來源。")
     
+    # 繪製符合條件的股票走勢圖
     unique_tickers = latest_df['Ticker'].unique()
-    if len(unique_tickers) > 0:
+    if len(unique_tickers) > 0:  # 只要有符合條件的股票就繪製圖表
         st.subheader("符合條件的股票走勢（按 22 日內漲幅排序）")
+        # 按 22 日內漲幅排序
         if 'Prior_Rise_22_%' in latest_df.columns:
             top_df = latest_df.groupby('Ticker').agg({'Prior_Rise_22_%': 'max'}).reset_index()
             top_df = top_df.sort_values(by='Prior_Rise_22_%', ascending=False)
+            # 如果股票數量大於 5，則只取前 5 隻；否則取所有股票
             num_to_display = min(len(unique_tickers), 5)
             top_tickers = top_df['Ticker'].head(num_to_display).tolist()
             plot_top_5_stocks(top_tickers)
         else:
             st.warning("無法繪製圖表：缺少 'Prior_Rise_22_%' 欄位，無法排序股票。")
     
+    # 繪製突破股票圖表
     breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume']]
     if not breakout_df.empty:
         st.subheader("當前突破股票（可買入）")
