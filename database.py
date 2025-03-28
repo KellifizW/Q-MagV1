@@ -221,7 +221,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         return False
 
 def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
-    """更新資料庫，只下載前 20 筆 tickers"""
+    """更新資料庫，只下載前 20 筆 tickers，修復日期邏輯"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -236,9 +236,11 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         logger.info(f"更新資料庫，只處理前 20 筆股票：{tickers}")
         st.write(f"更新資料庫，只處理前 20 筆股票：{tickers}")
         
-        current_date = datetime.now().date() - timedelta(days=1)
+        current_date = datetime.now().date()
+        end_date = current_date - timedelta(days=1)  # 確保結束日期不過未來
         cursor.execute("SELECT last_updated FROM metadata")
         last_updated = cursor.fetchone()
+        
         if last_updated:
             try:
                 last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d %H:%M:%S').date()
@@ -246,19 +248,25 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
                 last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d').date()
             st.write(f"上次更新日期：{last_updated_date}")
         else:
-            last_updated_date = current_date - timedelta(days=1)
-            st.write("無上次更新記錄，使用前一天作為起始日期")
+            # 若無上次更新記錄，從 180 天前開始
+            schedule = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date)
+            if schedule.empty:
+                logger.error("NASDAQ 日曆無效，無法確定交易日")
+                st.error("NASDAQ 日曆無效，無法更新資料庫")
+                return False
+            last_updated_date = schedule.index[0].date()
+            st.write(f"無上次更新記錄，從 180 天前開始：{last_updated_date}")
         
-        schedule = nasdaq.schedule(start_date=last_updated_date, end_date=current_date)
+        schedule = nasdaq.schedule(start_date=last_updated_date, end_date=end_date)
         if len(schedule) <= 1:
             logger.info("無新交易日數據，已跳過更新")
-            st.write("今日無新數據，已跳過更新")
+            st.write("無新交易日數據，已跳過更新")
             conn.close()
             return False
         
         start_date = last_updated_date + timedelta(days=1)
-        logger.info(f"更新資料庫，日期範圍：{start_date} 至 {current_date}")
-        st.write(f"更新資料庫，日期範圍：{start_date} 至 {current_date}")
+        logger.info(f"更新資料庫，日期範圍：{start_date} 至 {end_date}")
+        st.write(f"更新資料庫，日期範圍：{start_date} 至 {end_date}")
         
         total_batches = (len(tickers) + batch_size - 1) // batch_size
         for i in range(0, len(tickers), batch_size):
@@ -266,7 +274,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             batch_num = i // batch_size + 1
             st.write(f"更新：下載批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票：{batch_tickers})")
             
-            data = download_with_retry(batch_tickers, start=start_date, end=current_date)
+            data = download_with_retry(batch_tickers, start=start_date, end=end_date)
             if data is None:
                 logger.warning(f"批次 {batch_num} 下載失敗，跳過：{batch_tickers}")
                 continue
@@ -304,7 +312,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
                 push_to_github(repo, f"Updated {batch_num} batches of stock data")
             time.sleep(5)
         
-        cursor.execute("UPDATE metadata SET last_updated = ?", (current_date.strftime('%Y-%m-%d'),))
+        cursor.execute("UPDATE metadata SET last_updated = ?", (end_date.strftime('%Y-%m-%d'),))
         conn.commit()
         push_to_github(repo, "Final update of stocks.db")
         conn.close()
@@ -329,8 +337,8 @@ def fetch_stock_data(tickers, stock_pool=None, db_path=DB_PATH, trading_days=70)
         conn.close()
         
         if data.empty:
-            logger.error("資料庫中無符合條件的數據，股票：{tickers}")
-            st.error("資料庫中無符合條件的數據，請檢查初始化是否成功，股票：{tickers}")
+            logger.error(f"資料庫中無符合條件的數據，股票：{tickers}")
+            st.error(f"資料庫中無符合條件的數據，請檢查初始化是否成功，股票：{tickers}")
             return None
         logger.info(f"成功從資料庫提取數據，股票：{tickers}，行數：{len(data)}")
         st.write(f"成功從資料庫提取數據，股票：{tickers}，行數：{len(data)}")
@@ -355,8 +363,8 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
         missing_tickers = [ticker for ticker in tickers_sp500 if ticker not in existing_tickers]
         
         if not missing_tickers:
-            logger.info("無缺失的 S&P 500 股票，檢查的股票：{tickers_sp500}")
-            st.write("無缺失的 S&P 500 股票，檢查的股票：{tickers_sp500}")
+            logger.info(f"無缺失的 S&P 500 股票，檢查的股票：{tickers_sp500}")
+            st.write(f"無缺失的 S&P 500 股票，檢查的股票：{tickers_sp500}")
             conn.close()
             return False
         
