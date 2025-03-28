@@ -182,7 +182,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
         # 獲取現有股票的最新日期
         ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
-        existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date'])))
+        existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date']).dt.date))  # 轉為 date
         logger.info(f"資料庫中已有股票數量：{len(existing_tickers)} 筆")
         st.write(f"調試：資料庫中已有股票數量：{len(existing_tickers)} 筆")
 
@@ -197,7 +197,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             if not last_date:
                 tickers_to_update.append(ticker)
                 continue
-            days_missing = (end_date - last_date.date()).days
+            days_missing = (end_date - last_date).days  # 直接計算日期差
             if days_missing > 0:
                 tickers_to_update.append(ticker)
             elif days_missing + MIN_TRADING_DAYS > 180:
@@ -220,7 +220,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 st.write(f"更新：處理批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票)")
 
                 batch_start_dates = {t: existing_tickers.get(t, end_date - timedelta(days=180)) for t in batch_tickers}
-                earliest_start = min(batch_start_dates.values()).date()
+                earliest_start = min(batch_start_dates.values())
                 schedule = nasdaq.schedule(start_date=earliest_start, end_date=end_date)
                 if schedule.empty:
                     logger.error("NASDAQ 日曆無效")
