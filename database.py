@@ -126,7 +126,7 @@ def get_github_file_info():
         if response.status_code == 200:
             data = response.json()
             size = data.get("size", 0) / 1024  # 轉換為 KB
-            last_updated = data.get("sha", "未知")  # 使用 SHA 作為更新標識
+            last_updated = data.get("sha", "未知")
             return {"size_kb": size, "last_updated": last_updated}
         else:
             logger.warning(f"無法獲取 GitHub 檔案資訊，狀態碼：{response.status_code}")
@@ -138,7 +138,7 @@ def get_github_file_info():
         return None
 
 def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None):
-    """增量更新資料庫，結束後提供下載與 GitHub 資訊"""
+    """增量更新資料庫，提供手動推送按鈕"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件")
         st.error("未提供 Git 倉庫物件")
@@ -260,16 +260,13 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         conn.commit()
         conn.close()
 
-        # 推送
+        # 顯示更新結果
         if rows_inserted_total > 0:
-            push_success = push_to_github(repo, f"Updated stocks.db with {rows_inserted_total} new rows (10% test)")
-            if not push_success:
-                st.write("推送失敗，但更新已完成")
+            st.write(f"更新完成，插入 {rows_inserted_total} 行新數據")
         else:
-            logger.info("無新數據插入，跳過推送")
-            st.write("調試：無新數據插入，跳過推送")
+            st.write("更新完成，無新數據插入")
 
-        # 無論成功與否，提供下載按鈕
+        # 提供下載按鈕
         if os.path.exists(DB_PATH):
             with open(DB_PATH, "rb") as file:
                 st.download_button(
@@ -280,6 +277,14 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 )
         else:
             st.error("stocks.db 不存在，無法提供下載")
+
+        # 提供手動推送按鈕
+        if st.button("推送至 GitHub"):
+            push_success = push_to_github(repo, f"Manual push: Updated stocks.db with {rows_inserted_total} new rows (10% test)")
+            if push_success:
+                st.success("手動推送成功")
+            else:
+                st.error("手動推送失敗")
 
         # 查詢並顯示 GitHub 上的檔案資訊
         github_info = get_github_file_info()
@@ -306,6 +311,13 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                     file_name="stocks.db",
                     mime="application/octet-stream"
                 )
+        # 提供手動推送按鈕
+        if st.button("推送至 GitHub（異常後）"):
+            push_success = push_to_github(repo, "Manual push after error")
+            if push_success:
+                st.success("手動推送成功")
+            else:
+                st.error("手動推送失敗")
         # 查詢 GitHub 資訊
         github_info = get_github_file_info()
         if github_info:
