@@ -9,6 +9,7 @@ import streamlit as st
 import logging
 import time
 import requests
+from pytz import timezone
 
 # 設置日誌
 logging.basicConfig(
@@ -25,6 +26,7 @@ nasdaq = mcal.get_calendar('NASDAQ')
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 MIN_TRADING_DAYS = 130  # 最小交易日數要求
 MAX_NEW_TICKERS_PER_UPDATE = 100  # 每次更新最多新增股票數
+US_EASTERN = timezone('US/Eastern')  # 美國東部時區
 
 # 設置 yfinance 快取位置
 yf.set_tz_cache_location("/tmp/yfinance_cache")
@@ -131,7 +133,7 @@ def download_with_retry(tickers, start, end, retries=5, delay=10):
     return None
 
 def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
-    """初始化資料庫，檢查現有數據並增量添加，最多新增100個新股票"""
+    """初始化資料庫，檢查現有數據並增量添加，最多新增100個新股票，使用美國東部時間"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -150,16 +152,17 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         logger.info(f"初始化資料庫，檢查所有股票：{len(tickers)} 筆")
         st.write(f"初始化資料庫，檢查所有股票：{len(tickers)} 筆")
         
-        current_date = datetime.now().date()
-        end_date = current_date - timedelta(days=1)  # 確保結束日期不過未來
+        # 使用美國東部時間計算當前日期
+        current_date = datetime.now(US_EASTERN).date()
+        end_date = current_date - timedelta(days=1)  # 結束日期為昨天（ET）
         schedule = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date)
         if schedule.empty:
             logger.error("NASDAQ 日曆無效，無法確定交易日")
             st.error("NASDAQ 日曆無效，無法初始化資料庫")
             return False
         start_date = schedule.index[0].date()
-        logger.info(f"初始化資料庫，日期範圍：{start_date} 至 {end_date}")
-        st.write(f"初始化資料庫，日期範圍：{start_date} 至 {end_date}")
+        logger.info(f"初始化資料庫，日期範圍：{start_date} 至 {end_date} (美國東部時間)")
+        st.write(f"初始化資料庫，日期範圍：{start_date} 至 {end_date} (美國東部時間)")
         
         # 檢查現有股票及其交易日數
         ticker_days = pd.read_sql_query("SELECT Ticker, COUNT(DISTINCT Date) as days FROM stocks GROUP BY Ticker", conn)
@@ -249,7 +252,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         return False
 
 def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
-    """更新資料庫，檢查130個交易日數據，每次最多新增100個新股票"""
+    """更新資料庫，檢查130個交易日數據，每次最多新增100個新股票，使用美國東部時間"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -268,8 +271,9 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         logger.info(f"更新資料庫，檢查所有股票：{len(tickers)} 筆")
         st.write(f"更新資料庫，檢查所有股票：{len(tickers)} 筆")
         
-        current_date = datetime.now().date()
-        end_date = current_date - timedelta(days=1)  # 結束日期為昨天
+        # 使用美國東部時間計算當前日期
+        current_date_et = datetime.now(US_EASTERN).date()
+        end_date = current_date_et - timedelta(days=1)  # 結束日期為昨天（ET）
         
         # 檢查 metadata 是否有記錄
         cursor.execute("SELECT last_updated FROM metadata")
@@ -280,7 +284,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
                 last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d %H:%M:%S').date()
             except ValueError:
                 last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d').date()
-            st.write(f"上次更新日期：{last_updated_date}")
+            st.write(f"上次更新日期：{last_updated_date} (美國東部時間)")
         else:
             # 若無記錄，從 180 天前開始
             schedule = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date)
@@ -289,7 +293,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
                 st.error("NASDAQ 日曆無效，無法更新資料庫")
                 return False
             last_updated_date = schedule.index[0].date()
-            st.write(f"無上次更新記錄，從 180 天前開始：{last_updated_date}")
+            st.write(f"無上次更新記錄，從 180 天前開始：{last_updated_date} (美國東部時間)")
         
         # 設置 start_date，若上次更新日期晚於或等於昨天，則回溯 180 天
         start_date = last_updated_date
@@ -300,9 +304,10 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
                 st.error("NASDAQ 日曆無效，無法更新資料庫")
                 return False
             start_date = schedule.index[0].date()
-            logger.info(f"上次更新日期晚於或等於昨天，調整開始日期為：{start_date}")
-            st.write(f"上次更新日期晚於或等於昨天，調整開始日期為：{start_date}")
+            logger.info(f"上次更新日期晚於或等於昨天，調整開始日期為：{start_date} (美國東部時間)")
+            st.write(f"上次更新日期晚於或等於昨天，調整開始日期為：{start_date} (美國東部時間)")
         
+        # 確保日期範圍至少包含一個交易日
         schedule = nasdaq.schedule(start_date=start_date, end_date=end_date)
         if schedule.empty:
             logger.info("無新交易日數據，已跳過更新")
@@ -310,8 +315,8 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             conn.close()
             return False
         
-        logger.info(f"更新資料庫，日期範圍：{start_date} 至 {end_date}")
-        st.write(f"更新資料庫，日期範圍：{start_date} 至 {end_date}")
+        logger.info(f"更新資料庫，日期範圍：{start_date} 至 {end_date} (美國東部時間)")
+        st.write(f"更新資料庫，日期範圍：{start_date} 至 {end_date} (美國東部時間)")
         
         # 檢查現有股票及其交易日數
         ticker_days = pd.read_sql_query("SELECT Ticker, COUNT(DISTINCT Date) as days FROM stocks GROUP BY Ticker", conn)
@@ -398,10 +403,10 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         return False
 
 def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
-    """從資料庫中提取股票數據"""
+    """從資料庫中提取股票數據，使用美國東部時間"""
     try:
         conn = sqlite3.connect(db_path)
-        end_date = datetime.now().date()
+        end_date = datetime.now(US_EASTERN).date()
         start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[-trading_days].date()
         
         query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?']*len(tickers))}) AND Date >= ?"
@@ -421,7 +426,7 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
         return None
 
 def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
-    """擴展 S&P 500 股票數據，檢查130個交易日數據，每次最多新增100個新股票"""
+    """擴展 S&P 500 股票數據，檢查130個交易日數據，每次最多新增100個新股票，使用美國東部時間"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -440,7 +445,7 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
         logger.info(f"檢查 S&P 500 股票：{len(tickers_sp500)} 筆")
         st.write(f"檢查 S&P 500 股票：{len(tickers_sp500)} 筆")
         
-        end_date = datetime.now().date() - timedelta(days=1)
+        end_date = datetime.now(US_EASTERN).date() - timedelta(days=1)
         start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
         
         # 檢查現有股票及其交易日數
@@ -466,8 +471,8 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
             return False
         
         st.write(f"檢測到 {len(tickers_to_download)} 隻 S&P 500 股票需下載，股票：{tickers_to_download}")
-        logger.info(f"補充 S&P 500 股票，日期範圍：{start_date} 至 {end_date}")
-        st.write(f"補充 S&P 500 股票，日期範圍：{start_date} 至 {end_date}")
+        logger.info(f"補充 S&P 500 股票，日期範圍：{start_date} 至 {end_date} (美國東部時間)")
+        st.write(f"補充 S&P 500 股票，日期範圍：{start_date} 至 {end_date} (美國東部時間)")
         
         total_batches = (len(tickers_to_download) + batch_size - 1) // batch_size
         for i in range(0, len(tickers_to_download), batch_size):
