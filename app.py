@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import os
 from screening import screen_stocks, fetch_stock_data, get_nasdaq_100, get_sp500, get_nasdaq_all
 from visualize import plot_top_5_stocks, plot_breakout_stocks
 from database import init_repo, init_database, update_database  # 匯入所有必要函數
