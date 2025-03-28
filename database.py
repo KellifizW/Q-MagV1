@@ -31,6 +31,30 @@ US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 20
 INITIAL_CHECK_PERCENTAGE = 0.10  # 檢查 10% 股票
 
+def check_readonly(db_path):
+    """檢查資料庫是否唯讀並返回結果"""
+    try:
+        if not os.path.exists(db_path):
+            st.write(f"{db_path} 不存在，將創建新檔案")
+            logger.info(f"{db_path} 不存在")
+            return False  # 新檔案不會是唯讀
+        # 嘗試以寫入模式打開
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS temp_test (id INTEGER)")
+            conn.execute("DROP TABLE temp_test")
+        st.write(f"{db_path} 可寫入")
+        logger.info(f"{db_path} 可寫入")
+        return False
+    except sqlite3.OperationalError as e:
+        if "readonly" in str(e).lower():
+            st.write(f"{db_path} 是唯讀狀態")
+            logger.error(f"{db_path} 是唯讀狀態")
+            return True
+        else:
+            st.write(f"{db_path} 訪問失敗：{str(e)}")
+            logger.error(f"{db_path} 訪問失敗：{str(e)}")
+            return True
+
 def ensure_writable(db_path):
     """確保資料庫檔案可寫"""
     try:
@@ -166,15 +190,19 @@ def get_nasdaq_all(csv_tickers=TICKERS_CSV):
         return []
 
 def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None):
-    """增量更新資料庫，從最後一個股票倒序檢查 10%，單一連接管理"""
+    """增量更新資料庫，從最後一個股票倒序檢查 10%，檢查唯讀狀態"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件")
         st.error("未提供 Git 倉庫物件")
         return False
 
     try:
-        # 確保資料庫可寫
-        ensure_writable(db_path)
+        # 檢查資料庫是否唯讀
+        is_readonly = check_readonly(db_path)
+        if is_readonly:
+            st.error("資料庫為唯讀，無法更新")
+            return False
+        ensure_writable(db_path)  # 確保可寫
 
         # 讀取股票清單
         if not os.path.exists(tickers_file):
@@ -262,7 +290,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                     ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
                     ticker_df['Ticker'] = ticker
                     if ticker in existing_tickers:
-                        ticker_df = ticker_df[pd.to_datetime(ticker_df['Date']) > existing_tickers[ticker]]
+                        ticker_df = ticker_df[pd.to_datetime(ticker_df['Date']).dt.date > existing_tickers[ticker]]  # 轉為 date 比較
                     all_data.append(ticker_df)
 
                 if not all_data:
@@ -336,7 +364,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         logger.error(f"資料庫更新失敗：{str(e)}")
         st.error(f"資料庫更新失敗：{str(e)}")
         if 'conn' in locals():
-            conn.close()  # 確保異常時關閉連接
+            conn.close()
         if os.path.exists(DB_PATH):
             with open(DB_PATH, "rb") as file:
                 st.download_button(
