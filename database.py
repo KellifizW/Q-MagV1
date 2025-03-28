@@ -21,20 +21,64 @@ REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 20
 
-def download_with_retry(tickers, start, end, retries=2, delay=5):
+def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
+    # 首先嘗試 yfinance
     for attempt in range(retries):
         try:
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
                 logger.warning(f"批次數據為空，股票：{tickers}")
                 return None
-            logger.info(f"成功下載 {len(tickers)} 檔股票數據")
+            logger.info(f"成功下載 {len(tickers)} 檔股票數據 (yfinance)")
             return data
         except Exception as e:
-            logger.warning(f"下載失敗，股票：{tickers}，錯誤：{str(e)}，重試 {attempt + 1}/{retries}")
+            logger.warning(f"yfinance 下載失敗，股票：{tickers}，錯誤：{str(e)}，重試 {attempt + 1}/{retries}")
             time.sleep(delay)
-    logger.error(f"下載 {tickers} 失敗，已達最大重試次數")
-    return None
+
+    # 如果 yfinance 失敗，切換到 Alpha Vantage
+    if not api_key:
+        logger.error(f"未提供 Alpha Vantage API Key，下載 {tickers} 失敗")
+        return None
+
+    logger.info(f"yfinance 重試失敗，切換到 Alpha Vantage 嘗試下載 {tickers}")
+    try:
+        all_data = []
+        for ticker in tickers:
+            url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&apikey={api_key}&outputsize=full"
+            response = requests.get(url).json()
+            if "Time Series (Daily)" not in response:
+                logger.warning(f"Alpha Vantage 無數據返回，股票：{ticker}")
+                continue
+            
+            time_series = response["Time Series (Daily)"]
+            df = pd.DataFrame.from_dict(time_series, orient='index').reset_index()
+            df = df.rename(columns={
+                'index': 'Date',
+                '1. open': 'Open',
+                '2. high': 'High',
+                '3. low': 'Low',
+                '4. close': 'Close',
+                '5. volume': 'Volume'
+            })
+            df['Ticker'] = ticker
+            # 因為 Alpha Vantage 沒有 Adj_Close，直接使用 Close 填充（或設為 None）
+            df['Adj Close'] = df['Close']
+            df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+            all_data.append(df[['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume', 'Ticker']])
+            time.sleep(1)  # Alpha Vantage 免費版有限制，避免超速
+
+        if not all_data:
+            logger.error(f"Alpha Vantage 下載 {tickers} 失敗，無有效數據")
+            return None
+
+        combined_df = pd.concat(all_data)
+        # 模擬 yfinance 的 MultiIndex 格式以兼容後續處理
+        combined_df = combined_df.set_index(['Date', 'Ticker']).unstack('Ticker')
+        logger.info(f"成功下載 {len(tickers)} 檔股票數據 (Alpha Vantage)")
+        return combined_df
+    except Exception as e:
+        logger.error(f"Alpha Vantage 下載 {tickers} 失敗，錯誤：{str(e)}")
+        return None
 
 def init_repo():
     """初始化 Git 倉庫"""
