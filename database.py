@@ -29,10 +29,10 @@ MIN_TRADING_DAYS = 130
 MAX_NEW_TICKERS_PER_UPDATE = 100
 US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 20
-INITIAL_CHECK_PERCENTAGE = 0.10  # 首次檢查 10% 股票
+INITIAL_CHECK_PERCENTAGE = 0.10  # 檢查 10% 股票
 
 def init_repo():
-    """初始化 Git 倉庫（適配 Streamlit 環境）"""
+    """初始化 Git 倉庫"""
     try:
         os.chdir(REPO_DIR)
         if not os.path.exists('.git'):
@@ -137,8 +137,22 @@ def get_github_file_info():
         st.write(f"調試：查詢 GitHub 檔案資訊失敗：{str(e)}")
         return None
 
+def get_nasdaq_all(csv_tickers=TICKERS_CSV):
+    """從 Tickers.csv 獲取所有 NASDAQ 股票"""
+    try:
+        if not os.path.exists(csv_tickers):
+            logger.error(f"找不到 {csv_tickers}")
+            st.error(f"找不到 {csv_tickers}")
+            return []
+        tickers_df = pd.read_csv(csv_tickers)
+        return tickers_df['Ticker'].tolist()
+    except Exception as e:
+        logger.error(f"讀取 {csv_tickers} 失敗：{str(e)}")
+        st.error(f"讀取 {csv_tickers} 失敗：{str(e)}")
+        return []
+
 def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None):
-    """增量更新資料庫，提供手動推送按鈕"""
+    """增量更新資料庫，從最後一個股票倒序檢查 10%"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件")
         st.error("未提供 Git 倉庫物件")
@@ -172,10 +186,11 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         logger.info(f"資料庫中已有股票數量：{len(existing_tickers)} 筆")
         st.write(f"調試：資料庫中已有股票數量：{len(existing_tickers)} 筆")
 
-        # 確定需要更新的股票（首次檢查 10%）
+        # 確定需要更新的股票（從最後一個開始，檢查 10%）
         current_date_et = datetime.now(US_EASTERN).date()
         end_date = current_date_et - timedelta(days=1)
-        tickers_to_check = tickers[:max(1, int(len(tickers) * INITIAL_CHECK_PERCENTAGE))]
+        num_to_check = max(1, int(len(tickers) * INITIAL_CHECK_PERCENTAGE))
+        tickers_to_check = tickers[-num_to_check:]  # 從最後一個開始取 10%
         tickers_to_update = []
         for ticker in tickers_to_check:
             last_date = existing_tickers.get(ticker)
@@ -192,8 +207,8 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             logger.info("測試範圍內股票數據已是最新，無需更新")
             st.write("測試範圍內股票數據已是最新，無需更新")
 
-        logger.info(f"需更新的股票數量（10% 測試）：{len(tickers_to_update)}")
-        st.write(f"需更新的股票數量（10% 測試）：{len(tickers_to_update)}")
+        logger.info(f"需更新的股票數量（10% 測試，倒序）：{len(tickers_to_update)}")
+        st.write(f"需更新的股票數量（10% 測試，倒序）：{len(tickers_to_update)}")
 
         # 分批更新
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size if tickers_to_update else 0
@@ -295,14 +310,13 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         else:
             st.write("無法獲取 GitHub 上 stocks.db 的資訊")
 
-        logger.info("資料庫更新完成（10% 測試）")
-        st.write("資料庫更新完成（10% 測試）")
+        logger.info("資料庫更新完成（10% 測試，倒序）")
+        st.write("資料庫更新完成（10% 測試，倒序）")
         return True
 
     except Exception as e:
         logger.error(f"資料庫更新失敗：{str(e)}")
         st.error(f"資料庫更新失敗：{str(e)}")
-        # 提供下載按鈕
         if os.path.exists(DB_PATH):
             with open(DB_PATH, "rb") as file:
                 st.download_button(
@@ -311,14 +325,12 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                     file_name="stocks.db",
                     mime="application/octet-stream"
                 )
-        # 提供手動推送按鈕
         if st.button("推送至 GitHub（異常後）"):
             push_success = push_to_github(repo, "Manual push after error")
             if push_success:
                 st.success("手動推送成功")
             else:
                 st.error("手動推送失敗")
-        # 查詢 GitHub 資訊
         github_info = get_github_file_info()
         if github_info:
             st.write(f"GitHub 上 stocks.db 資訊：")
@@ -327,7 +339,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         return False
 
 def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
-    """從資料庫中提取股票數據"""
+    """從資料庫中提取股票數據，用於篩選"""
     try:
         conn = sqlite3.connect(db_path)
         end_date = datetime.now(US_EASTERN).date()
