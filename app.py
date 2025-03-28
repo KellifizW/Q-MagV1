@@ -14,7 +14,7 @@ st.markdown("""
 
 #### 程式最終目的：
 1. **偵測 Qullamaggie Breakout 特徵**：檢查最近 30 日內是否有股票符合 Qullamaggie 描述的 Breakout 特徵：
-   - 前段顯著漲幅（22 日內漲幅 > 22 日內最小漲幅，67 日內漲幅 > 67 日內最小漲幅）。
+   - 前段顯著漲幅（22 日內漲幅 > 22 日內最小漲幅，67 日內漲幅 > 67 日內最小漲幅, 126 日內漲幅 > 126 日內最小漲幅）。
    - 隨後進入低波動盤整（盤整範圍 < 最大盤整範圍），成交量下降。
    - 價格突破盤整區間高點，且成交量放大（> 過去 10 天均量的 1.5 倍）。
 2. **識別買入時機並標記信號**：如果股票已到達買入時機（突破當天），在圖表上標記買入信號。
@@ -168,6 +168,7 @@ if 'df' in st.session_state:
         'Price': '價格',
         'Prior_Rise_22_%': '22 日內漲幅 (%)',
         'Prior_Rise_67_%': '67 日內漲幅 (%)',
+        'Prior_Rise_126_%': '126 日內漲幅 (%)',
         'Consolidation_Range_%': '盤整範圍 (%)',
         'ADR_%': '平均日波幅 (%)',
         'Breakout': '是否突破',
@@ -175,7 +176,7 @@ if 'df' in st.session_state:
     })
     
     # 定義要顯示的欄位
-    desired_columns = ['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']
+    desired_columns = ['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '126 日內漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']
     # 檢查哪些欄位存在
     available_columns = [col for col in desired_columns if col in display_df.columns]
     missing_columns = [col for col in desired_columns if col not in display_df.columns]
@@ -183,10 +184,10 @@ if 'df' in st.session_state:
     if missing_columns:
         st.warning(f"以下欄位在篩選結果中缺失：{missing_columns}")
         st.write("可能原因：")
-        st.write("- 篩選條件過嚴（例如 22 日內最小漲幅或 67 日內最小漲幅過高），導致無股票符合條件。")
+        st.write("- 篩選條件過嚴（例如 22 日內最小漲幅或 67 日內最小漲幅或 126 日內最小漲幅過高），導致無股票符合條件。")
         st.write("- 數據下載失敗，部分股票數據缺失。")
         st.write("建議：")
-        st.write("- 降低 22 日內最小漲幅或 67 日內最小漲幅。")
+        st.write("- 降低 22 日內最小漲幅或 67 日內最小漲幅或 126 日內最小漲幅。")
         st.write("- 檢查網絡連線，確保數據下載正常。")
     
     if available_columns:
@@ -218,7 +219,7 @@ if 'df' in st.session_state:
     else:
         st.info("當前無突破股票（無可買入股票）。可能原因：")
         if latest_df['Breakout'].sum() == 0:
-            st.write("- 無股票價格突破盤整區間高點。嘗試增加最大盤整範圍或降低 22 日/67 日內最小漲幅。")
+            st.write("- 無股票價格突破盤整區間高點。嘗試增加最大盤整範圍或降低 22 日/67 /126日內最小漲幅。")
         elif latest_df['Breakout_Volume'].sum() == 0:
             st.write("- 突破股票的成交量不足（需 > 過去 10 天均量的 1.5 倍）。嘗試調整成交量條件。")
 
