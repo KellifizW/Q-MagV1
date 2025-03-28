@@ -31,6 +31,20 @@ US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 20
 INITIAL_CHECK_PERCENTAGE = 0.10  # 檢查 10% 股票
 
+def ensure_writable(db_path):
+    """確保資料庫檔案可寫"""
+    try:
+        if os.path.exists(db_path):
+            os.chmod(db_path, 0o666)  # 設置為可讀寫
+            logger.info(f"已確保 {db_path} 可寫")
+        else:
+            open(db_path, 'a').close()  # 創建空檔案
+            os.chmod(db_path, 0o666)
+            logger.info(f"創建並設置 {db_path} 為可寫")
+    except Exception as e:
+        logger.error(f"無法設置 {db_path} 為可寫：{str(e)}")
+        st.error(f"無法設置 {db_path} 為可寫：{str(e)}")
+
 def init_repo():
     """初始化 Git 倉庫"""
     try:
@@ -152,13 +166,16 @@ def get_nasdaq_all(csv_tickers=TICKERS_CSV):
         return []
 
 def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None):
-    """增量更新資料庫，從最後一個股票倒序檢查 10%"""
+    """增量更新資料庫，從最後一個股票倒序檢查 10%，單一連接管理"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件")
         st.error("未提供 Git 倉庫物件")
         return False
 
     try:
+        # 確保資料庫可寫
+        ensure_writable(db_path)
+
         # 讀取股票清單
         if not os.path.exists(tickers_file):
             logger.error(f"找不到 {tickers_file}")
@@ -169,7 +186,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         logger.info(f"從 {tickers_file} 讀取股票數量：{len(tickers)} 筆")
         st.write(f"從 {tickers_file} 讀取股票數量：{len(tickers)} 筆")
 
-        # 連接到資料庫
+        # 使用單一資料庫連接
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
@@ -179,10 +196,11 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             PRIMARY KEY (Date, Ticker))''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
         cursor.execute('''CREATE INDEX IF NOT EXISTS idx_ticker_date ON stocks (Ticker, Date)''')
+        conn.commit()
 
         # 獲取現有股票的最新日期
         ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
-        existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date']).dt.date))  # 轉為 date
+        existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date']).dt.date))
         logger.info(f"資料庫中已有股票數量：{len(existing_tickers)} 筆")
         st.write(f"調試：資料庫中已有股票數量：{len(existing_tickers)} 筆")
 
@@ -190,14 +208,14 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         current_date_et = datetime.now(US_EASTERN).date()
         end_date = current_date_et - timedelta(days=1)
         num_to_check = max(1, int(len(tickers) * INITIAL_CHECK_PERCENTAGE))
-        tickers_to_check = tickers[-num_to_check:]  # 從最後一個開始取 10%
+        tickers_to_check = tickers[-num_to_check:]
         tickers_to_update = []
         for ticker in tickers_to_check:
             last_date = existing_tickers.get(ticker)
             if not last_date:
                 tickers_to_update.append(ticker)
                 continue
-            days_missing = (end_date - last_date).days  # 直接計算日期差
+            days_missing = (end_date - last_date).days
             if days_missing > 0:
                 tickers_to_update.append(ticker)
             elif days_missing + MIN_TRADING_DAYS > 180:
@@ -317,6 +335,8 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
     except Exception as e:
         logger.error(f"資料庫更新失敗：{str(e)}")
         st.error(f"資料庫更新失敗：{str(e)}")
+        if 'conn' in locals():
+            conn.close()  # 確保異常時關閉連接
         if os.path.exists(DB_PATH):
             with open(DB_PATH, "rb") as file:
                 st.download_button(
