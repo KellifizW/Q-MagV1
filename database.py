@@ -245,22 +245,29 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             conn.close()
         return False
 
-def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
-    """從資料庫提取股票數據"""
+def fetch_stock_data(tickers=None, db_path=DB_PATH):
+    """從資料庫提取股票數據，無日期限制"""
     try:
         if not os.path.exists(db_path):
             st.error(f"資料庫檔案 {db_path} 不存在，請先初始化或更新資料庫")
-            return None
+            return None, []
         conn = sqlite3.connect(db_path)
-        start_date = (datetime.now(US_EASTERN).date() - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
-        query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?']*len(tickers))}) AND Date >= ?"
-        data = pd.read_sql_query(query, conn, params=tickers + [start_date], index_col='Date', parse_dates=True)
+        
+        # 如果未提供 tickers，動態獲取所有股票代碼
+        if tickers is None:
+            tickers = pd.read_sql_query("SELECT DISTINCT Ticker FROM stocks", conn)['Ticker'].tolist()
+            st.write(f"從資料庫中找到 {len(tickers)} 隻股票")
+        
+        # 提取所有數據，無日期限制
+        query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?']*len(tickers))}) ORDER BY Date"
+        data = pd.read_sql_query(query, conn, params=tickers, index_col='Date', parse_dates=True)
         conn.close()
         
         if data.empty:
             st.error(f"無數據：{tickers}")
-            return None
-        return data.pivot(columns='Ticker')
+            return None, tickers
+        st.write(f"成功提取數據，包含 {len(data)} 筆記錄")
+        return data.pivot(columns='Ticker'), tickers
     except Exception as e:
         st.error(f"提取數據失敗：{str(e)}")
-        return None
+        return None, tickers
