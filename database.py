@@ -216,7 +216,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 return True
 
         # 分批下載並更新
-        api_key = st.secrets.get("ALPHA_VANTAGE_API_KEY", None)
+        api_key = st.secrets["ALPHA_VANTAGE_API_KEY"]
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
         for i in range(0, len(tickers_to_update), batch_size):
             batch_tickers = tickers_to_update[i:i + batch_size]
