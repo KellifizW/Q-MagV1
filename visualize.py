@@ -12,7 +12,6 @@ def plot_top_5_stocks(top_5_tickers):
     for ticker in top_5_tickers:
         st.write(f"正在處理股票 {ticker}...")
         
-        # 優先使用批量數據
         if stock_data_batch is not None and ticker in stock_data_batch.columns.get_level_values(1):
             try:
                 stock_data = stock_data_batch.xs(ticker, level='Ticker', axis=1)
@@ -42,7 +41,7 @@ def plot_top_5_stocks(top_5_tickers):
                 st.error(f"清理後 {ticker} 的數據長度 {len(stock_data)} 小於最小要求 10")
                 continue
             
-            dates = [date.strftime("%Y-%m-%d") for date in stock_data.index]
+            dates = stock_data.index.tolist()  # 直接使用字串索引
             prices = stock_data["Close"].astype(float).tolist()
             volumes = stock_data["Volume"].astype(int).tolist()
             
@@ -127,7 +126,7 @@ def plot_breakout_stocks(breakout_tickers, consol_days):
             recent_high = stock_data['Close'][-consol_days-1:-1].max()
             recent_low = stock_data['Close'][-consol_days-1:-1].min()
             
-            dates = [date.strftime("%Y-%m-%d") for date in stock_data.index]
+            dates = stock_data.index.tolist()  # 直接使用字串索引
             prices = stock_data["Close"].astype(float).tolist()
             volumes = stock_data["Volume"].astype(int).tolist()
             
