@@ -27,7 +27,7 @@ def get_nasdaq_all(csv_tickers):
     """直接使用 csv_tickers，不擴展"""
     return csv_tickers
 
-def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5):
+def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40,min_rise_126=80, max_range=5, min_adr=5):
     results = []
     failed_stocks = {}
     matched_count = 0
@@ -60,10 +60,12 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             
             close_shift_22 = close.shift(22)
             close_shift_67 = close.shift(67)
+            close_shift_126 = close.shift(126)
             rise_22 = (close / close_shift_22 - 1) * 100
             rise_67 = (close / close_shift_67 - 1) * 100
+            rise_126 = (close / close_shift_126 - 1) * 100
             
-            if rise_22.isna().all() or rise_67.isna().all():
+            if rise_22.isna().all() or rise_67.isna().all() or rise_126.isna().all():
                 failed_stocks[ticker] = f"無法計算漲幅，可能因數據缺失，總長度 {len(close)}，有效數據點 {valid_close_count}"
                 continue
             
@@ -76,7 +78,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             breakout = (close > recent_high.shift(1)) & (close.shift(1) <= recent_high.shift(1))
             breakout_volume = volume > volume.rolling(10).mean() * 1.5
             
-            mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & \
+            mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & (rise_126 >= min_rise_126) \
                    (consolidation_range <= max_range) & (adr >= min_adr)
             
             if mask.any():
@@ -87,6 +89,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                     'Price': close[mask],
                     'Prior_Rise_22_%': rise_22[mask],
                     'Prior_Rise_67_%': rise_67[mask],
+                    'Prior_Rise_126_%': rise_126[mask],
                     'Consolidation_Range_%': consolidation_range[mask],
                     'ADR_%': adr[mask],
                     'Breakout': breakout[mask],
@@ -94,7 +97,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                 })
                 results.append(matched)
                 st.write(f"股票 {ticker} 符合條件（最新）：22 日漲幅 = {rise_22.iloc[-1]:.2f}%, "
-                         f"67 日漲幅 = {rise_67.iloc[-1]:.2f}%, 盤整範圍 = {consolidation_range.iloc[-1]:.2f}%, "
+                         f"67 日漲幅 = {rise_67.iloc[-1]:.2f}%, f"126 日漲幅 = {rise_126.iloc[-1]:.2f}%, 盤整範圍 = {consolidation_range.iloc[-1]:.2f}%, "
                          f"ADR = {adr.iloc[-1]:.2f}%")
             else:
                 unmatched_count += 1
@@ -116,7 +119,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     else:
         return pd.DataFrame()
 
-def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, max_range=5, min_adr=5, progress_bar=None):
+def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, max_range=5, min_adr=5, progress_bar=None):
     """主篩選函數，從 SQLite 查詢數據"""
     data, all_tickers = fetch_stock_data(tickers)
     if data is None:
@@ -132,7 +135,7 @@ def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_2
     
     st.write(f"篩選股票池：{stock_pool}，共 {len(tickers)} 隻股票")
     
-    results = analyze_stock_batch(data, tickers, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr)
+    results = analyze_stock_batch(data, tickers, prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, max_range, min_adr)
     
     if progress_bar:
         progress_bar.progress(1.0)
