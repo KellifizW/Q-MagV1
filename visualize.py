@@ -1,7 +1,8 @@
 # visualize.py
 import streamlit as st
 import pandas as pd
-import altair as alt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from screening import fetch_stock_data
 
 def plot_top_5_stocks(top_5_tickers):
@@ -13,23 +14,20 @@ def plot_top_5_stocks(top_5_tickers):
         
         if stock_data_batch is not None and ticker in stock_data_batch.columns.get_level_values(1):
             try:
-                stock_data = stock_data_batch.xs(ticker, level='Ticker', axis=1).reset_index()
+                stock_data = stock_data_batch.xs(ticker, level='Ticker', axis=1)
                 error = None
             except KeyError as e:
                 stock_data = None
                 error = f"無法從批量數據中提取 {ticker}：{str(e)}"
         else:
             stock_data, error = fetch_stock_data(ticker, trading_days=70)
-            if stock_data is not None:
-                stock_data = stock_data.reset_index()
         
         if stock_data is None or stock_data.empty:
             st.error(f"無法繪製 {ticker} 的圖表：{error if error else '數據為空'}")
             continue
         
-        stock_data['Date'] = pd.to_datetime(stock_data['Date'])
         st.write(f"{ticker} 數據長度：{len(stock_data)} 筆")
-        st.write(f"{ticker} 數據日期範圍：{stock_data['Date'].min()} 到 {stock_data['Date'].max()}")
+        st.write(f"{ticker} 數據日期範圍：{stock_data.index[0]} 到 {stock_data.index[-1]}")
         
         required_columns = ['Close', 'Volume']
         missing_columns = [col for col in required_columns if col not in stock_data.columns]
@@ -43,70 +41,57 @@ def plot_top_5_stocks(top_5_tickers):
                 st.error(f"清理後 {ticker} 的數據長度 {len(stock_data)} 小於最小要求 10")
                 continue
             
+            dates = stock_data.index.tolist()  # 直接使用字串索引
+            prices = stock_data["Close"].astype(float).tolist()
+            volumes = stock_data["Volume"].astype(int).tolist()
+            
             stock_data['MA10'] = stock_data['Close'].rolling(window=10).mean()
-            stock_data['EMA12'] = stock_data['Close'].ewm(span=12, adjust=False).mean()
-            stock_data['EMA26'] = stock_data['Close'].ewm(span=26, adjust=False).mean()
-            stock_data['MACD'] = stock_data['EMA12'] - stock_data['EMA26']
-            stock_data['Signal'] = stock_data['MACD'].ewm(span=9, adjust=False).mean()
-            stock_data['Histogram'] = stock_data['MACD'] - stock_data['Signal']
+            ma10 = stock_data['MA10'].astype(float).tolist()
             
-            # 價格和成交量圖表
-            price_base = alt.Chart(stock_data).encode(
-                x=alt.X('Date:T', title='日期'),
-                tooltip=['Date:T', 'Close:Q', 'MA10:Q', 'Volume:Q']
-            )
+            ema12 = stock_data["Close"].ewm(span=12, adjust=False).mean()
+            ema26 = stock_data["Close"].ewm(span=26, adjust=False).mean()
+            macd_line = (ema12 - ema26).tolist()
+            macd_signal = pd.Series(macd_line).ewm(span=9, adjust=False).mean().tolist()
+            macd_histogram = (pd.Series(macd_line) - pd.Series(macd_signal)).tolist()
             
-            price_line = price_base.mark_line(color='blue').encode(
-                y=alt.Y('Close:Q', title='價格')
-            )
-            ma10_line = price_base.mark_line(color='orange').encode(
-                y='MA10:Q'
-            )
-            volume_bar = price_base.mark_bar(opacity=0.3, color='pink').encode(
-                y=alt.Y('Volume:Q', title='成交量', axis=alt.Axis(orient='right'))
-            )
+            x_indices = list(range(len(dates)))
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                                subplot_titles=(f"{ticker} 近 3 個月走勢", "MACD"), row_heights=[0.7, 0.3],
+                                specs=[[{"secondary_y": True}], [{}]])
             
-            price_chart = alt.layer(price_line, ma10_line, volume_bar).resolve_scale(
-                y='independent'
-            ).properties(
-                height=500,
-                title=f'{ticker} 近 3 個月走勢'
-            )
+            customdata_price = [[dates[i], ma10[i]] for i in range(len(dates))]
+            fig.add_trace(go.Scatter(x=x_indices, y=prices, mode="lines", name="股價", line=dict(color="blue"),
+                                     hovertemplate="日期: %{customdata[0]}<br>股價: %{y:.2f}<br>10 日均線: %{customdata[1]:.2f}",
+                                     customdata=customdata_price), row=1, col=1, secondary_y=False)
+            fig.add_trace(go.Scatter(x=x_indices, y=ma10, mode="lines", name="10 日均線", line=dict(color="orange"),
+                                     hovertemplate="日期: %{customdata}<br>10 日均線: %{y:.2f}", customdata=dates),
+                          row=1, col=1, secondary_y=False)
+            fig.add_trace(go.Bar(x=x_indices, y=volumes, name="成交量", opacity=0.3, marker_color="pink",
+                                 hovertemplate="日期: %{customdata}<br>成交量: %{y:,.0f}", customdata=dates),
+                          row=1, col=1, secondary_y=True)
+            fig.add_trace(go.Scatter(x=x_indices, y=macd_line, mode="lines", name="MACD 線", line=dict(color="blue"),
+                                     hovertemplate="日期: %{customdata}<br>MACD: %{y:.2f}", customdata=dates),
+                          row=2, col=1)
+            fig.add_trace(go.Scatter(x=x_indices, y=macd_signal, mode="lines", name="訊號線", line=dict(color="orange"),
+                                     hovertemplate="日期: %{customdata}<br>訊號線: %{y:.2f}", customdata=dates),
+                          row=2, col=1)
+            fig.add_trace(go.Bar(x=x_indices, y=macd_histogram, name="MACD 柱狀圖", marker_color="gray", opacity=0.5,
+                                 hovertemplate="日期: %{customdata}<br>MACD 柱狀圖: %{y:.2f}", customdata=dates),
+                          row=2, col=1)
             
-            # MACD 圖表
-            macd_base = alt.Chart(stock_data).encode(
-                x=alt.X('Date:T', title='日期'),
-                tooltip=['Date:T', 'MACD:Q', 'Signal:Q', 'Histogram:Q']
-            )
+            fig.update_layout(title=f"{ticker} 近 3 個月走勢與 MACD", xaxis_title="日期", showlegend=True, height=800,
+                              margin=dict(b=100))
+            fig.update_yaxes(title_text="價格", row=1, col=1, secondary_y=False)
+            fig.update_yaxes(title_text="成交量", row=1, col=1, secondary_y=True)
+            fig.update_yaxes(title_text="MACD", row=2, col=1)
             
-            macd_line = macd_base.mark_line(color='blue').encode(
-                y=alt.Y('MACD:Q', title='MACD')
-            )
-            signal_line = macd_base.mark_line(color='orange').encode(
-                y='Signal:Q'
-            )
-            histogram_bar = macd_base.mark_bar(opacity=0.5, color='gray').encode(
-                y='Histogram:Q'
-            )
+            tickvals = x_indices[::5]
+            ticktext = [dates[i] for i in tickvals]
+            fig.update_xaxes(tickvals=tickvals, ticktext=ticktext, tickangle=45, tickfont=dict(size=10), row=1, col=1)
+            fig.update_xaxes(tickvals=tickvals, ticktext=ticktext, tickangle=45, tickfont=dict(size=10), row=2, col=1)
             
-            macd_chart = alt.layer(macd_line, signal_line, histogram_bar).properties(
-                height=200,
-                title='MACD'
-            )
-            
-            # 組合圖表
-            final_chart = alt.vconcat(price_chart, macd_chart).resolve_scale(
-                x='shared'
-            ).configure_axisX(
-                labelAngle=45,
-                labelFontSize=10
-            ).properties(
-                title=f'{ticker} 近 3 個月走勢與 MACD'
-            )
-            
-            st.altair_chart(final_chart, use_container_width=True)
+            st.plotly_chart(fig)
             st.write(f"成功繪製 {ticker} 的圖表")
-            
         except Exception as e:
             st.error(f"繪製 {ticker} 的圖表時發生錯誤：{str(e)}")
 
@@ -119,15 +104,13 @@ def plot_breakout_stocks(breakout_tickers, consol_days):
         
         if stock_data_batch is not None and ticker in stock_data_batch.columns.get_level_values(1):
             try:
-                stock_data = stock_data_batch.xs(ticker, level='Ticker', axis=1).reset_index()
+                stock_data = stock_data_batch.xs(ticker, level='Ticker', axis=1)
                 error = None
             except KeyError as e:
                 stock_data = None
                 error = f"無法從批量數據中提取 {ticker}：{str(e)}"
         else:
             stock_data, error = fetch_stock_data(ticker, trading_days=70)
-            if stock_data is not None:
-                stock_data = stock_data.reset_index()
         
         if stock_data is None or stock_data.empty:
             st.error(f"無法繪製 {ticker} 的圖表：{error if error else '數據為空'}")
@@ -142,80 +125,59 @@ def plot_breakout_stocks(breakout_tickers, consol_days):
             stock_data = stock_data.dropna()
             recent_high = stock_data['Close'][-consol_days-1:-1].max()
             recent_low = stock_data['Close'][-consol_days-1:-1].min()
-            stock_data['Date'] = pd.to_datetime(stock_data['Date'])
             
-            stock_data['EMA12'] = stock_data['Close'].ewm(span=12, adjust=False).mean()
-            stock_data['EMA26'] = stock_data['Close'].ewm(span=26, adjust=False).mean()
-            stock_data['MACD'] = stock_data['EMA12'] - stock_data['EMA26']
-            stock_data['Signal'] = stock_data['MACD'].ewm(span=9, adjust=False).mean()
-            stock_data['Histogram'] = stock_data['MACD'] - stock_data['Signal']
+            dates = stock_data.index.tolist()  # 直接使用字串索引
+            prices = stock_data["Close"].astype(float).tolist()
+            volumes = stock_data["Volume"].astype(int).tolist()
             
-            # 價格和成交量圖表
-            price_base = alt.Chart(stock_data).encode(
-                x=alt.X('Date:T', title='日期'),
-                tooltip=['Date:T', 'Close:Q', 'Volume:Q']
-            )
+            ema12 = stock_data["Close"].ewm(span=12, adjust=False).mean()
+            ema26 = stock_data["Close"].ewm(span=26, adjust=False).mean()
+            macd_line = (ema12 - ema26).tolist()
+            macd_signal = pd.Series(macd_line).ewm(span=9, adjust=False).mean().tolist()
+            macd_histogram = (pd.Series(macd_line) - pd.Series(macd_signal)).tolist()
             
-            price_line = price_base.mark_line(color='blue').encode(
-                y=alt.Y('Close:Q', title='價格')
-            )
-            volume_bar = price_base.mark_bar(opacity=0.3, color='pink').encode(
-                y=alt.Y('Volume:Q', title='成交量', axis=alt.Axis(orient='right'))
-            )
+            x_indices = list(range(len(dates)))
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                                subplot_titles=(f"{ticker} 突破圖表（買入信號）", "MACD"), row_heights=[0.7, 0.3],
+                                specs=[[{"secondary_y": True}], [{}]])
             
-            # 阻力位和支撐位
-            resistance = alt.Chart(pd.DataFrame({'y': [recent_high]})).mark_rule(color='red', strokeDash=[5,5]).encode(
-                y='y:Q'
-            )
-            support = alt.Chart(pd.DataFrame({'y': [recent_low]})).mark_rule(color='green', strokeDash=[5,5]).encode(
-                y='y:Q'
-            )
-            buy_signal = price_base.mark_point(size=100, color='blue', shape='star').encode(
-                y='Close:Q'
-            ).transform_filter(
-                alt.datum.Date == stock_data['Date'].iloc[-1]
-            )
+            fig.add_trace(go.Scatter(x=x_indices, y=prices, mode="lines", name="價格", line=dict(color="blue"),
+                                     hovertemplate="日期: %{customdata}<br>價格: %{y:.2f}", customdata=dates),
+                          row=1, col=1, secondary_y=False)
+            fig.add_trace(go.Scatter(x=[x_indices[0], x_indices[-1]], y=[recent_high, recent_high], mode='lines',
+                                     line=dict(dash='dash', color='red'), name='阻力位', hovertemplate="阻力位: %{y:.2f}"),
+                          row=1, col=1, secondary_y=False)
+            fig.add_trace(go.Scatter(x=[x_indices[0], x_indices[-1]], y=[recent_low, recent_low], mode='lines',
+                                     line=dict(dash='dash', color='green'), name='支撐位', hovertemplate="支撐位: %{y:.2f}"),
+                          row=1, col=1, secondary_y=False)
+            fig.add_trace(go.Scatter(x=[x_indices[-1]], y=[prices[-1]], mode='markers', marker=dict(size=12, color='blue', symbol='star'),
+                                     name='買入信號', hovertemplate="日期: %{customdata}<br>價格: %{y:.2f}", customdata=[dates[-1]]),
+                          row=1, col=1, secondary_y=False)
+            fig.add_trace(go.Bar(x=x_indices, y=volumes, name="成交量", opacity=0.3, marker_color="pink",
+                                 hovertemplate="日期: %{customdata}<br>成交量: %{y:,.0f}", customdata=dates),
+                          row=1, col=1, secondary_y=True)
+            fig.add_trace(go.Scatter(x=x_indices, y=macd_line, mode="lines", name="MACD 線", line=dict(color="blue"),
+                                     hovertemplate="日期: %{customdata}<br>MACD: %{y:.2f}", customdata=dates),
+                          row=2, col=1)
+            fig.add_trace(go.Scatter(x=x_indices, y=macd_signal, mode="lines", name="訊號線", line=dict(color="orange"),
+                                     hovertemplate="日期: %{customdata}<br>訊號線: %{y:.2f}", customdata=dates),
+                          row=2, col=1)
+            fig.add_trace(go.Bar(x=x_indices, y=macd_histogram, name="MACD 柱狀圖", marker_color="gray", opacity=0.5,
+                                 hovertemplate="日期: %{customdata}<br>MACD 柱狀圖: %{y:.2f}", customdata=dates),
+                          row=2, col=1)
             
-            price_chart = alt.layer(price_line, volume_bar, resistance, support, buy_signal).resolve_scale(
-                y='independent'
-            ).properties(
-                height=500,
-                title=f'{ticker} 突破圖表（買入信號）'
-            )
+            fig.update_layout(title=f"{ticker} 突破圖表（買入信號）與 MACD", xaxis_title="日期", showlegend=True, height=800,
+                              margin=dict(b=100))
+            fig.update_yaxes(title_text="價格", row=1, col=1, secondary_y=False)
+            fig.update_yaxes(title_text="成交量", row=1, col=1, secondary_y=True)
+            fig.update_yaxes(title_text="MACD", row=2, col=1)
             
-            # MACD 圖表
-            macd_base = alt.Chart(stock_data).encode(
-                x=alt.X('Date:T', title='日期'),
-                tooltip=['Date:T', 'MACD:Q', 'Signal:Q', 'Histogram:Q']
-            )
+            tickvals = x_indices[::5]
+            ticktext = [dates[i] for i in tickvals]
+            fig.update_xaxes(tickvals=tickvals, ticktext=ticktext, tickangle=45, tickfont=dict(size=10), row=1, col=1)
+            fig.update_xaxes(tickvals=tickvals, ticktext=ticktext, tickangle=45, tickfont=dict(size=10), row=2, col=1)
             
-            macd_line = macd_base.mark_line(color='blue').encode(
-                y=alt.Y('MACD:Q', title='MACD')
-            )
-            signal_line = macd_base.mark_line(color='orange').encode(
-                y='Signal:Q'
-            )
-            histogram_bar = macd_base.mark_bar(opacity=0.5, color='gray').encode(
-                y='Histogram:Q'
-            )
-            
-            macd_chart = alt.layer(macd_line, signal_line, histogram_bar).properties(
-                height=200,
-                title='MACD'
-            )
-            
-            # 組合圖表
-            final_chart = alt.vconcat(price_chart, macd_chart).resolve_scale(
-                x='shared'
-            ).configure_axisX(
-                labelAngle=45,
-                labelFontSize=10
-            ).properties(
-                title=f'{ticker} 突破圖表（買入信號）與 MACD'
-            )
-            
-            st.altair_chart(final_chart, use_container_width=True)
+            st.plotly_chart(fig)
             st.write(f"成功繪製 {ticker} 的圖表")
-            
         except Exception as e:
             st.error(f"繪製 {ticker} 的圖表時發生錯誤：{str(e)}")
