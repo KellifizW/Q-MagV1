@@ -154,7 +154,7 @@ def init_database():
             st.error(f"初始化資料庫失敗：{str(e)}")
             st.session_state['db_initialized'] = False
 
-def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None, check_percentage=0.10):
+def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None, check_percentage=0.1, lookback_days=30):
     """增量更新資料庫，包含完整性檢查"""
     if repo is None:
         st.error("未提供 Git 倉庫物件")
@@ -217,6 +217,12 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
         for i in range(0, len(tickers_to_update), batch_size):
             batch_tickers = tickers_to_update[i:i + batch_size]
+            # 動態計算 start_date，回溯 lookback_days
+            batch_start_dates = [
+                existing_tickers.get(ticker, default_start_date) - timedelta(days=lookback_days)
+                for ticker in batch_tickers
+            ]
+            start_date = min(batch_start_dates)
             data = download_with_retry(batch_tickers, start=start_date, end=end_date)
             if data is None:
                 continue
