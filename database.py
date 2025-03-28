@@ -218,7 +218,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         # 提供手動推送和下載選項
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("手動推送至 GitHub"):
+            if st.button("手動推送至 GitHub", key="manual_push"):
                 manual_push_success = push_to_github(repo, "Manual push after update")
                 if manual_push_success:
                     st.success("手動推送至 GitHub 成功")
@@ -231,7 +231,8 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                         label="下載 stocks.db",
                         data=file,
                         file_name="stocks.db",
-                        mime="application/octet-stream"
+                        mime="application/octet-stream",
+                        key="download_db"
                     )
             else:
                 st.error("stocks.db 不存在，無法下載")
@@ -263,35 +264,3 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
     except Exception as e:
         st.error(f"提取數據失敗：{str(e)}")
         return None
-
-def main():
-    """主函數，使用 session_state 控制初始化和更新"""
-    # 初始化 Git 倉庫（僅首次執行）
-    if 'repo_initialized' not in st.session_state:
-        repo = init_repo()
-        st.session_state['repo_initialized'] = repo is not None
-        st.session_state['repo'] = repo
-
-    # 初始化資料庫（僅首次執行）
-    init_database()
-
-    # 提供檢查比例選擇和更新按鈕
-    check_percentage = st.slider("檢查和更新比例 (%)", 0, 100, 10, help="選擇要檢查和更新的股票比例（從末尾開始）") / 100.0
-
-    if st.button("更新資料庫"):
-        if st.session_state.get('repo_initialized', False):
-            update_database(repo=st.session_state['repo'], check_percentage=check_percentage)
-        else:
-            st.error("Git 倉庫未初始化，無法更新資料庫")
-
-    if st.button("初始化並更新資料庫"):
-        repo = init_repo()
-        if repo:
-            st.session_state['repo_initialized'] = True
-            st.session_state['repo'] = repo
-            update_database(repo=repo, check_percentage=check_percentage)
-        else:
-            st.error("Git 倉庫初始化失敗，無法更新資料庫")
-
-if __name__ == "__main__":
-    main()
