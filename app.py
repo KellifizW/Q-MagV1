@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 import os
-from screening import screen_stocks, fetch_stock_data, get_nasdaq_100, get_sp500, get_nasdaq_all
+from screening import screen_stocks, get_nasdaq_100, get_sp500, get_nasdaq_all
 from visualize import plot_top_5_stocks, plot_breakout_stocks
-from database import init_repo, init_database, update_database  # 匯入所有必要函數
+from database import init_repo, init_database, update_database
 from datetime import datetime, timedelta
 
 st.title("Qullamaggie Breakout Screener")
@@ -100,9 +100,9 @@ if submit_button:
     if index_option == "NASDAQ 100":
         tickers = get_nasdaq_100(csv_tickers)
     elif index_option == "S&P 500":
-        tickers = get_sp500(csv_tickers)
+        tickers = get_sp500()  # 注意這裡不需要過濾 csv_tickers，因為你的 screen_stocks 會處理
     else:
-        tickers = get_nasdaq_all(csv_tickers="Tickers.csv")[:max_stocks]
+        tickers = get_nasdaq_all(csv_tickers)[:max_stocks]
     st.session_state['tickers'] = tickers
 
     # 檢查資料庫是否存在
@@ -112,20 +112,31 @@ if submit_button:
         # 篩選邏輯
         with st.spinner("篩選中..."):
             progress_bar = st.progress(0)
-            df = screen_stocks(tickers, prior_days, consol_days, min_rise_22, min_rise_67, max_range, min_adr, progress_bar)
-            progress_bar.progress(100)
+            # 修正 screen_stocks 調用，加入 stock_pool 參數
+            df = screen_stocks(
+                tickers=tickers,
+                stock_pool=index_option,
+                prior_days=prior_days,
+                consol_days=consol_days,
+                min_rise_22=min_rise_22,
+                min_rise_67=min_rise_67,
+                max_range=max_range,
+                min_adr=min_adr,
+                progress_bar=progress_bar
+            )
+            progress_bar.progress(1.0)
             if 'stock_data' in st.session_state:
                 st.write(f"批量數據已載入，涵蓋 {len(st.session_state['stock_data'].columns.get_level_values(1))} 檔股票")
             if df.empty:
                 st.warning("無符合條件的股票。請嘗試以下調整：")
-                st.write("- **降低 22 日內最小漲幅** (目前: {}%)：嘗試設為 0-10%".format(min_rise_22))
-                st.write("- **降低 67 日內最小漲幅** (目前: {}%)：嘗試設為 20-40%".format(min_rise_67))
-                st.write("- **增加最大盤整範圍** (目前: {}%)：嘗試設為 10-15%".format(max_range))
-                st.write("- **降低最小 ADR** (目前: {}%)：嘗試設為 0-2%".format(min_adr))
+                st.write(f"- **降低 22 日內最小漲幅** (目前: {min_rise_22}%)：嘗試設為 0-10%")
+                st.write(f"- **降低 67 日內最小漲幅** (目前: {min_rise_67}%)：嘗試設為 20-40%")
+                st.write(f"- **增加最大盤整範圍** (目前: {max_range}%)：嘗試設為 10-15%")
+                st.write(f"- **降低最小 ADR** (目前: {min_adr}%)：嘗試設為 0-2%")
                 st.write("- **擴大股票池**：選擇 NASDAQ All 並增加最大篩選股票數量")
             else:
                 st.session_state['df'] = df
-                st.success(f"找到 {len(df)} 隻符合條件的股票（{len(df['Ticker'].unique())} 隻非重複股票）")
+                st.success(f"找到 {len(df)} 筆符合條件的記錄（{len(df['Ticker'].unique())} 隻非重複股票）")
 
 # 顯示篩選結果
 if 'df' in st.session_state:
