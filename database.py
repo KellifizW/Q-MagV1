@@ -29,15 +29,7 @@ MIN_TRADING_DAYS = 130
 MAX_NEW_TICKERS_PER_UPDATE = 100
 US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 20
-
-# 設置 yfinance 快取位置
-yf.set_tz_cache_location("/tmp/yfinance_cache")
-
-# 自訂 requests Session
-session = requests.Session()
-adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
-session.mount('http://', adapter)
-session.mount('https://', adapter)
+INITIAL_CHECK_PERCENTAGE = 0.10  # 首次檢查 10% 股票
 
 def init_repo():
     """初始化 Git 倉庫（適配 Streamlit 環境）"""
@@ -70,7 +62,7 @@ def init_repo():
         return None
 
 def push_to_github(repo, message="Update stocks.db"):
-    """單次推送變更到 GitHub"""
+    """單次推送變更到 GitHub，若失敗則提供下載選項"""
     try:
         os.chdir(REPO_DIR)
         logger.info(f"準備推送至 GitHub，訊息：{message}")
@@ -104,17 +96,35 @@ def push_to_github(repo, message="Update stocks.db"):
     except subprocess.CalledProcessError as e:
         logger.error(f"Git 操作失敗 - 命令：{e.cmd}, stdout: {e.stdout}, stderr: {e.stderr}")
         st.error(f"推送至 GitHub 失敗：{e.stderr}")
+        # 提供下載選項
+        if os.path.exists(DB_PATH):
+            with open(DB_PATH, "rb") as file:
+                st.download_button(
+                    label="下載當前 stocks.db",
+                    data=file,
+                    file_name="stocks.db",
+                    mime="application/octet-stream"
+                )
         return False
     except Exception as e:
         logger.error(f"推送至 GitHub 發生未知錯誤：{str(e)}")
         st.error(f"推送至 GitHub 發生未知錯誤: {str(e)}")
+        # 提供下載選項
+        if os.path.exists(DB_PATH):
+            with open(DB_PATH, "rb") as file:
+                st.download_button(
+                    label="下載當前 stocks.db",
+                    data=file,
+                    file_name="stocks.db",
+                    mime="application/octet-stream"
+                )
         return False
 
 def download_with_retry(tickers, start, end, retries=5, delay=10):
     """帶重試機制的股票數據下載"""
     for attempt in range(retries):
         try:
-            data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False, threads=False, session=session)
+            data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False, threads=False)
             if data.empty:
                 logger.warning(f"批次數據為空，股票：{tickers}，重試 {attempt + 1}/{retries}")
             else:
@@ -127,7 +137,7 @@ def download_with_retry(tickers, start, end, retries=5, delay=10):
     return None
 
 def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None):
-    """增量更新資料庫並單次推送至 GitHub（適配 Streamlit）"""
+    """增量更新資料庫並提供中斷下載選項，首次檢查 10% 股票"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件")
         st.error("未提供 Git 倉庫物件")
@@ -161,11 +171,12 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         logger.info(f"資料庫中已有股票數量：{len(existing_tickers)} 筆")
         st.write(f"調試：資料庫中已有股票數量：{len(existing_tickers)} 筆")
 
-        # 確定需要更新的股票
+        # 確定需要更新的股票（首次檢查 10%）
         current_date_et = datetime.now(US_EASTERN).date()
         end_date = current_date_et - timedelta(days=1)  # 昨天
+        tickers_to_check = tickers[:max(1, int(len(tickers) * INITIAL_CHECK_PERCENTAGE))]  # 檢查 10%
         tickers_to_update = []
-        for ticker in tickers:
+        for ticker in tickers_to_check:
             last_date = existing_tickers.get(ticker)
             if not last_date or (end_date - last_date.date()).days > 0:
                 tickers_to_update.append(ticker)
@@ -173,13 +184,13 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 tickers_to_update.append(ticker)  # 若數據不足 130 天，重新下載
 
         if not tickers_to_update:
-            logger.info("所有股票數據已是最新，無需更新")
-            st.write("所有股票數據已是最新，無需更新")
+            logger.info("測試範圍內所有股票數據已是最新，無需更新")
+            st.write("測試範圍內所有股票數據已是最新，無需更新")
             conn.close()
             return True
 
-        logger.info(f"需更新的股票數量：{len(tickers_to_update)}")
-        st.write(f"需更新的股票數量：{len(tickers_to_update)}")
+        logger.info(f"需更新的股票數量（10% 測試）：{len(tickers_to_update)}")
+        st.write(f"需更新的股票數量（10% 測試）：{len(tickers_to_update)}")
 
         # 分批更新
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
@@ -201,8 +212,18 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             # 下載數據
             data = download_with_retry(batch_tickers, start=start_date, end=end_date)
             if data is None:
-                logger.warning(f"批次 {batch_num} 下載失敗，跳過")
-                continue
+                logger.warning(f"批次 {batch_num} 下載失敗，提供當前 stocks.db 下載")
+                st.error(f"批次 {batch_num} 下載失敗，已中斷更新")
+                if os.path.exists(DB_PATH):
+                    with open(DB_PATH, "rb") as file:
+                        st.download_button(
+                            label="下載當前 stocks.db（中斷時）",
+                            data=file,
+                            file_name="stocks.db",
+                            mime="application/octet-stream"
+                        )
+                conn.close()
+                return False
 
             # 處理並插入數據
             df = data.reset_index()
@@ -249,22 +270,33 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
         # 單次推送
         if rows_inserted_total > 0:
-            push_to_github(repo, f"Updated stocks.db with {rows_inserted_total} new rows")
+            push_success = push_to_github(repo, f"Updated stocks.db with {rows_inserted_total} new rows (10% test)")
+            if not push_success:
+                st.write("推送失敗，但更新已完成")
         else:
             logger.info("無新數據插入，跳過推送")
             st.write("調試：無新數據插入，跳過推送")
 
-        logger.info("資料庫更新完成")
-        st.write("資料庫更新完成")
+        logger.info("資料庫更新完成（10% 測試）")
+        st.write("資料庫更新完成（10% 測試）")
         return True
 
     except Exception as e:
         logger.error(f"資料庫更新失敗：{str(e)}")
         st.error(f"資料庫更新失敗：{str(e)}")
+        # 提供下載選項
+        if os.path.exists(DB_PATH):
+            with open(DB_PATH, "rb") as file:
+                st.download_button(
+                    label="下載當前 stocks.db（異常時）",
+                    data=file,
+                    file_name="stocks.db",
+                    mime="application/octet-stream"
+                )
         return False
 
 def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
-    """從資料庫中提取股票數據（保持不變）"""
+    """從資料庫中提取股票數據"""
     try:
         conn = sqlite3.connect(db_path)
         end_date = datetime.now(US_EASTERN).date()
