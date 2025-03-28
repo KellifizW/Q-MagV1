@@ -104,32 +104,33 @@ def push_to_github(repo, message="Update stocks.db"):
         return False
 
 def download_with_retry(tickers, start, end, retries=5, delay=10):
-    """帶重試機制的股票數據下載"""
+    """帶重試機制的股票數據下載，增強除錯信息"""
     for attempt in range(retries):
         try:
             logger.info(f"嘗試下載 {tickers}，第 {attempt + 1} 次，日期範圍：{start} 至 {end}")
-            st.write(f"嘗試下載 {len(tickers)} 檔股票，第 {attempt + 1} 次，日期範圍：{start} 至 {end}")
+            st.write(f"嘗試下載 {len(tickers)} 檔股票：{tickers}，第 {attempt + 1} 次，日期範圍：{start} 至 {end}")
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False, threads=False, session=session)
             if data.empty:
-                logger.warning(f"批次數據為空，可能是無效日期或股票已下市，重試 {attempt + 1}/{retries}")
-                st.write(f"批次數據為空，重試 {attempt + 1}/{retries}")
+                logger.warning(f"批次數據為空，可能是無效日期或股票已下市，股票：{tickers}，重試 {attempt + 1}/{retries}")
+                st.write(f"批次數據為空，股票：{tickers}，重試 {attempt + 1}/{retries}")
             else:
-                logger.info(f"成功下載 {len(tickers)} 檔股票數據，列數：{len(data.columns)}")
-                st.write(f"成功下載 {len(tickers)} 檔股票數據")
+                logger.info(f"成功下載 {len(tickers)} 檔股票數據，股票：{tickers}，列數：{len(data.columns)}，行數：{len(data)}")
+                st.write(f"成功下載 {len(tickers)} 檔股票數據，股票：{tickers}，列數：{len(data.columns)}，行數：{len(data)}")
                 return data
         except Exception as e:
-            logger.warning(f"下載失敗: {str(e)}，重試 {attempt + 1}/{retries}")
-            st.write(f"下載失敗: {str(e)}，重試 {attempt + 1}/{retries}")
+            logger.warning(f"下載失敗，股票：{tickers}，錯誤：{str(e)}，重試 {attempt + 1}/{retries}")
+            st.write(f"下載失敗，股票：{tickers}，錯誤：{str(e)}，重試 {attempt + 1}/{retries}")
             if "YFPricesMissingError" in str(e) and "no price data found" in str(e):
-                logger.error(f"確定為無數據錯誤，可能股票已下市或日期範圍無效：{tickers}")
-                break  # 如果是無數據錯誤，提前退出重試
+                logger.error(f"確定為無數據錯誤，可能股票已下市或日期範圍無效，股票：{tickers}，日期範圍：{start} 至 {end}")
+                st.error(f"確定為無數據錯誤，可能股票已下市或日期範圍無效，股票：{tickers}，日期範圍：{start} 至 {end}")
+                break
             time.sleep(delay * (attempt + 1))
     logger.error(f"下載 {tickers} 失敗，已達最大重試次數，日期範圍：{start} 至 {end}")
-    st.error(f"下載 {len(tickers)} 檔股票失敗，已達最大重試次數")
+    st.error(f"下載 {len(tickers)} 檔股票失敗，已達最大重試次數，股票：{tickers}，日期範圍：{start} 至 {end}")
     return None
 
 def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
-    """初始化資料庫"""
+    """初始化資料庫，只下載前 20 筆 tickers"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -146,6 +147,11 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         cursor.execute("DELETE FROM stocks")
         cursor.execute("DELETE FROM metadata")
         
+        # 只取前 20 筆 tickers
+        tickers = tickers[:20]
+        logger.info(f"初始化資料庫，只處理前 20 筆股票：{tickers}")
+        st.write(f"初始化資料庫，只處理前 20 筆股票：{tickers}")
+        
         current_date = datetime.now().date()
         end_date = current_date - timedelta(days=1)  # 確保結束日期不過未來
         schedule = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date)
@@ -161,7 +167,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         for i in range(0, len(tickers), batch_size):
             batch_tickers = tickers[i:i + batch_size]
             batch_num = i // batch_size + 1
-            st.write(f"初始化：下載批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票)")
+            st.write(f"初始化：下載批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票：{batch_tickers})")
             
             data = download_with_retry(batch_tickers, start=start_date, end=end_date)
             if data is None:
@@ -215,7 +221,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         return False
 
 def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
-    """更新資料庫"""
+    """更新資料庫，只下載前 20 筆 tickers"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -225,7 +231,12 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        current_date = datetime.now().date() - timedelta(days=1)  # 避免未來日期
+        # 只取前 20 筆 tickers
+        tickers = tickers[:20]
+        logger.info(f"更新資料庫，只處理前 20 筆股票：{tickers}")
+        st.write(f"更新資料庫，只處理前 20 筆股票：{tickers}")
+        
+        current_date = datetime.now().date() - timedelta(days=1)
         cursor.execute("SELECT last_updated FROM metadata")
         last_updated = cursor.fetchone()
         if last_updated:
@@ -253,7 +264,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         for i in range(0, len(tickers), batch_size):
             batch_tickers = tickers[i:i + batch_size]
             batch_num = i // batch_size + 1
-            st.write(f"更新：下載批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票)")
+            st.write(f"更新：下載批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票：{batch_tickers})")
             
             data = download_with_retry(batch_tickers, start=start_date, end=current_date)
             if data is None:
@@ -318,17 +329,19 @@ def fetch_stock_data(tickers, stock_pool=None, db_path=DB_PATH, trading_days=70)
         conn.close()
         
         if data.empty:
-            logger.error("資料庫中無符合條件的數據")
-            st.error("資料庫中無符合條件的數據，請檢查初始化是否成功")
+            logger.error("資料庫中無符合條件的數據，股票：{tickers}")
+            st.error("資料庫中無符合條件的數據，請檢查初始化是否成功，股票：{tickers}")
             return None
+        logger.info(f"成功從資料庫提取數據，股票：{tickers}，行數：{len(data)}")
+        st.write(f"成功從資料庫提取數據，股票：{tickers}，行數：{len(data)}")
         return data.pivot(columns='Ticker')
     except Exception as e:
-        logger.error(f"提取股票數據失敗：{str(e)}")
-        st.error(f"提取股票數據失敗：{str(e)}")
+        logger.error(f"提取股票數據失敗，股票：{tickers}，錯誤：{str(e)}")
+        st.error(f"提取股票數據失敗，股票：{tickers}，錯誤：{str(e)}")
         return None
 
 def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
-    """擴展 S&P 500 股票數據"""
+    """擴展 S&P 500 股票數據，只下載前 20 筆 tickers"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -337,16 +350,18 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
     try:
         conn = sqlite3.connect(db_path)
         existing_tickers = pd.read_sql_query("SELECT DISTINCT Ticker FROM stocks", conn)['Ticker'].tolist()
+        # 只取前 20 筆 tickers_sp500
+        tickers_sp500 = tickers_sp500[:20]
         missing_tickers = [ticker for ticker in tickers_sp500 if ticker not in existing_tickers]
         
         if not missing_tickers:
-            logger.info("無缺失的 S&P 500 股票")
-            st.write("無缺失的 S&P 500 股票")
+            logger.info("無缺失的 S&P 500 股票，檢查的股票：{tickers_sp500}")
+            st.write("無缺失的 S&P 500 股票，檢查的股票：{tickers_sp500}")
             conn.close()
             return False
         
-        st.write(f"檢測到 {len(missing_tickers)} 隻 S&P 500 股票缺失，正在補充...")
-        end_date = datetime.now().date() - timedelta(days=1)  # 避免未來日期
+        st.write(f"檢測到 {len(missing_tickers)} 隻 S&P 500 股票缺失，正在補充，股票：{missing_tickers}")
+        end_date = datetime.now().date() - timedelta(days=1)
         start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
         logger.info(f"補充 S&P 500 股票，日期範圍：{start_date} 至 {end_date}")
         st.write(f"補充 S&P 500 股票，日期範圍：{start_date} 至 {end_date}")
@@ -355,7 +370,7 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
         for i in range(0, len(missing_tickers), batch_size):
             batch_tickers = missing_tickers[i:i + batch_size]
             batch_num = i // batch_size + 1
-            st.write(f"補充 S&P 500：下載批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票)")
+            st.write(f"補充 S&P 500：下載批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票：{batch_tickers})")
             
             data = download_with_retry(batch_tickers, start=start_date, end=end_date)
             if data is None:
