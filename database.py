@@ -238,6 +238,8 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         
         current_date = datetime.now().date()
         end_date = current_date - timedelta(days=1)  # 確保結束日期不過未來
+        
+        # 檢查 metadata 是否有記錄
         cursor.execute("SELECT last_updated FROM metadata")
         last_updated = cursor.fetchone()
         
@@ -248,7 +250,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
                 last_updated_date = datetime.strptime(last_updated[0], '%Y-%m-%d').date()
             st.write(f"上次更新日期：{last_updated_date}")
         else:
-            # 若無上次更新記錄，從 180 天前開始
+            # 若無記錄，從 180 天前開始
             schedule = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date)
             if schedule.empty:
                 logger.error("NASDAQ 日曆無效，無法確定交易日")
@@ -257,14 +259,21 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             last_updated_date = schedule.index[0].date()
             st.write(f"無上次更新記錄，從 180 天前開始：{last_updated_date}")
         
-        schedule = nasdaq.schedule(start_date=last_updated_date, end_date=end_date)
-        if len(schedule) <= 1:
+        # 設置 start_date 和 end_date
+        start_date = last_updated_date
+        if start_date >= end_date:
+            logger.info("上次更新日期晚於或等於昨天，無需更新")
+            st.write("上次更新日期晚於或等於昨天，無需更新")
+            conn.close()
+            return False
+        
+        schedule = nasdaq.schedule(start_date=start_date, end_date=end_date)
+        if schedule.empty:
             logger.info("無新交易日數據，已跳過更新")
             st.write("無新交易日數據，已跳過更新")
             conn.close()
             return False
         
-        start_date = last_updated_date + timedelta(days=1)
         logger.info(f"更新資料庫，日期範圍：{start_date} 至 {end_date}")
         st.write(f"更新資料庫，日期範圍：{start_date} 至 {end_date}")
         
@@ -313,6 +322,8 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             time.sleep(5)
         
         cursor.execute("UPDATE metadata SET last_updated = ?", (end_date.strftime('%Y-%m-%d'),))
+        if not last_updated:
+            cursor.execute("INSERT INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
         conn.commit()
         push_to_github(repo, "Final update of stocks.db")
         conn.close()
