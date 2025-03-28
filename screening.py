@@ -97,7 +97,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                 })
                 results.append(matched)
                 st.write(f"股票 {ticker} 符合條件（最新）：22 日漲幅 = {rise_22.iloc[-1]:.2f}%, "
-                         f"67 日漲幅 = {rise_67.iloc[-1]:.2f}%, f"126 日漲幅 = {rise_126.iloc[-1]:.2f}%, 盤整範圍 = {consolidation_range.iloc[-1]:.2f}%, "
+                         f"67 日漲幅 = {rise_67.iloc[-1]:.2f}%, "126 日漲幅 = {rise_126.iloc[-1]:.2f}%, 盤整範圍 = {consolidation_range.iloc[-1]:.2f}%, "
                          f"ADR = {adr.iloc[-1]:.2f}%")
             else:
                 unmatched_count += 1
