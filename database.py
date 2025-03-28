@@ -145,7 +145,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         num_to_check = max(1, int(len(tickers) * check_percentage))
         tickers_to_check = tickers[-num_to_check:]
         tickers_to_update = []
-        start_date = end_date - timedelta(days=180)
+        start_date = end_date - timedelta(days=210)
 
         for ticker in tickers_to_check:
             last_date = existing_tickers.get(ticker)
