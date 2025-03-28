@@ -131,7 +131,7 @@ def download_with_retry(tickers, start, end, retries=5, delay=10):
     return None
 
 def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
-    """初始化資料庫，檢查是否已有130個交易日數據，限制每次新增100個新股票"""
+    """初始化資料庫，檢查現有數據並增量添加，最多新增100個新股票"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -141,12 +141,11 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
+        # 創建表（若不存在）
         cursor.execute('''CREATE TABLE IF NOT EXISTS stocks (
             Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
             PRIMARY KEY (Date, Ticker))''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
-        cursor.execute("DELETE FROM stocks")
-        cursor.execute("DELETE FROM metadata")
         
         logger.info(f"初始化資料庫，檢查所有股票：{len(tickers)} 筆")
         st.write(f"初始化資料庫，檢查所有股票：{len(tickers)} 筆")
@@ -179,8 +178,8 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             new_ticker_count += 1
         
         if not tickers_to_download:
-            logger.info("無需下載新股票，已達限制或所有股票已有足夠數據")
-            st.write("無需下載新股票，已達限制或所有股票已有足夠數據")
+            logger.info("無需下載新股票，所有股票已有足夠數據或已達限制")
+            st.write("無需下載新股票，所有股票已有足夠數據或已達限制")
             conn.close()
             return False
         
@@ -215,7 +214,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
             
             for _, row in pivoted_df.iterrows():
-                cursor.execute('''INSERT OR REPLACE INTO stocks 
+                cursor.execute('''INSERT OR IGNORE INTO stocks 
                     (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
                     str(row['Date']), str(row['Ticker']),
@@ -231,7 +230,12 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
                 push_to_github(repo, f"Initialized {batch_num} batches of stock data")
             time.sleep(5)
         
-        cursor.execute("INSERT INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
+        # 更新 metadata
+        cursor.execute("SELECT last_updated FROM metadata")
+        if not cursor.fetchone():
+            cursor.execute("INSERT INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
+        else:
+            cursor.execute("UPDATE metadata SET last_updated = ?", (end_date.strftime('%Y-%m-%d'),))
         conn.commit()
         push_to_github(repo, "Final initialization of stocks.db")
         conn.close()
@@ -255,11 +259,17 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
+        # 確保表存在
+        cursor.execute('''CREATE TABLE IF NOT EXISTS stocks (
+            Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
+            PRIMARY KEY (Date, Ticker))''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
+        
         logger.info(f"更新資料庫，檢查所有股票：{len(tickers)} 筆")
         st.write(f"更新資料庫，檢查所有股票：{len(tickers)} 筆")
         
         current_date = datetime.now().date()
-        end_date = current_date - timedelta(days=1)  # 確保結束日期不過未來
+        end_date = current_date - timedelta(days=1)  # 結束日期為昨天
         
         # 檢查 metadata 是否有記錄
         cursor.execute("SELECT last_updated FROM metadata")
@@ -281,8 +291,18 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             last_updated_date = schedule.index[0].date()
             st.write(f"無上次更新記錄，從 180 天前開始：{last_updated_date}")
         
-        # 設置 start_date 和 end_date
+        # 設置 start_date，若上次更新日期晚於或等於昨天，則回溯 180 天
         start_date = last_updated_date
+        if start_date >= end_date:
+            schedule = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date)
+            if schedule.empty:
+                logger.error("NASDAQ 日曆無效，無法確定交易日")
+                st.error("NASDAQ 日曆無效，無法更新資料庫")
+                return False
+            start_date = schedule.index[0].date()
+            logger.info(f"上次更新日期晚於或等於昨天，調整開始日期為：{start_date}")
+            st.write(f"上次更新日期晚於或等於昨天，調整開始日期為：{start_date}")
+        
         schedule = nasdaq.schedule(start_date=start_date, end_date=end_date)
         if schedule.empty:
             logger.info("無新交易日數據，已跳過更新")
@@ -346,7 +366,7 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
             pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
             
             for _, row in pivoted_df.iterrows():
-                cursor.execute('''INSERT OR REPLACE INTO stocks 
+                cursor.execute('''INSERT OR IGNORE INTO stocks 
                     (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
                     str(row['Date']), str(row['Ticker']),
@@ -411,6 +431,12 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
+        # 確保表存在
+        cursor.execute('''CREATE TABLE IF NOT EXISTS stocks (
+            Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
+            PRIMARY KEY (Date, Ticker))''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
+        
         logger.info(f"檢查 S&P 500 股票：{len(tickers_sp500)} 筆")
         st.write(f"檢查 S&P 500 股票：{len(tickers_sp500)} 筆")
         
@@ -471,7 +497,7 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
             pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
             
             for _, row in pivoted_df.iterrows():
-                cursor.execute('''INSERT OR REPLACE INTO stocks 
+                cursor.execute('''INSERT OR IGNORE INTO stocks 
                     (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
                     str(row['Date']), str(row['Ticker']),
@@ -487,9 +513,12 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
                 push_to_github(repo, f"Extended S&P 500 with {batch_num} batches")
             time.sleep(5)
         
+        cursor.execute("UPDATE metadata SET last_updated = ?", (end_date.strftime('%Y-%m-%d'),))
+        if not cursor.fetchone():
+            cursor.execute("INSERT INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
+        conn.commit()
+        push_to_github(repo, "Final S&P 500 extension")
         conn.close()
-        if batch_num % 10 != 0:
-            push_to_github(repo, "Final S&P 500 extension")
         
         logger.info("S&P 500 股票補充完成")
         st.write("S&P 500 股票補充完成")
