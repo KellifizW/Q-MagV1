@@ -73,7 +73,7 @@ with st.sidebar.form(key="screening_form"):
     min_rise_67 = st.slider("67 日內最小漲幅 (%)", 0, 100, 40, help="股票在過去 67 日內的最小漲幅要求")
     max_range = st.slider("最大盤整範圍 (%)", 3, 15, 10, help="增加此值以放寬整理區間")
     min_adr = st.slider("最小 ADR (%)", 0, 10, 2, help="設為 0 以納入更多股票")
-    max_stocks = st.slider("最大篩選股票數量", 10, 500, 50, help="限制股票數量以加快處理速度，僅適用於 NASDAQ All")
+    max_stocks = st.slider("最大篩選股票數量(測試用)", 10, 1000, 50, help="限制股票數量以加快處理速度，僅適用於 NASDAQ All")
     submit_button = st.form_submit_button("運行篩選")
 
 # 重置按鈕
