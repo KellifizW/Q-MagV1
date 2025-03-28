@@ -27,10 +27,11 @@ st.markdown("""
 - **原作者 Qullamaggie 使用的參數**（根據 Reddit 文章）：
   - 前段上升天數：20 天
   - 盤整天數：10 天
-  - 22 日內最小漲幅：10%
-  - 67 日內最小漲幅：40%
+  - 22 交易日內最小漲幅：25%
+  - 67 交易日內最小漲幅：50%
+  - 126 交易日內最小漲幅：150%
   - 最大盤整範圍：10%
-  - 最小 ADR：2%
+  - 最小 ADR：5%
 """)
 
 # 初始化 Git 倉庫和資料庫（僅首次執行）
@@ -69,8 +70,9 @@ with st.sidebar.form(key="screening_form"):
         "盤整天數", 5, 15, 10,
         help="盤整天數是指股票在突破前低波動盤整的天數。計算方式：從最近一天向前回溯指定天數，檢查這段期間的價格波動範圍是否小於最大盤整範圍。"
     )
-    min_rise_22 = st.slider("22 日內最小漲幅 (%)", 0, 50, 10, help="股票在過去 22 日內的最小漲幅要求")
-    min_rise_67 = st.slider("67 日內最小漲幅 (%)", 0, 100, 40, help="股票在過去 67 日內的最小漲幅要求")
+    min_rise_22 = st.slider("22 日內最小漲幅 (%)", 0, 50, 10, help="股票在過去 22 交易日內的最小漲幅要求")
+    min_rise_67 = st.slider("67 日內最小漲幅 (%)", 0, 100, 40, help="股票在過去 67 交易日內的最小漲幅要求")
+    min_rise_126 = st.slider("126 日內最小漲幅 (%)", 0, 300, 80, help="股票在過去 126 交易日內的最小漲幅要求")
     max_range = st.slider("最大盤整範圍 (%)", 3, 15, 10, help="增加此值以放寬整理區間")
     min_adr = st.slider("最小 ADR (%)", 0, 10, 2, help="設為 0 以納入更多股票")
     max_stocks = st.slider("最大篩選股票數量(測試用)", 10, 1000, 50, help="限制股票數量以加快處理速度，僅適用於 NASDAQ All")
@@ -120,6 +122,7 @@ if submit_button:
                 consol_days=consol_days,
                 min_rise_22=min_rise_22,
                 min_rise_67=min_rise_67,
+                min_rise_126=min_rise_126,
                 max_range=max_range,
                 min_adr=min_adr,
                 progress_bar=progress_bar
@@ -131,6 +134,7 @@ if submit_button:
                 st.warning("無符合條件的股票。請嘗試以下調整：")
                 st.write(f"- **降低 22 日內最小漲幅** (目前: {min_rise_22}%)：嘗試設為 0-10%")
                 st.write(f"- **降低 67 日內最小漲幅** (目前: {min_rise_67}%)：嘗試設為 20-40%")
+                st.write(f"- **降低 126 日內最小漲幅** (目前: {min_rise_126}%)：嘗試設為 30-60%")
                 st.write(f"- **增加最大盤整範圍** (目前: {max_range}%)：嘗試設為 10-15%")
                 st.write(f"- **降低最小 ADR** (目前: {min_adr}%)：嘗試設為 0-2%")
                 st.write("- **擴大股票池**：選擇 NASDAQ All 並增加最大篩選股票數量")
