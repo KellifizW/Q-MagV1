@@ -130,7 +130,7 @@ def download_with_retry(tickers, start, end, retries=5, delay=10):
     return None
 
 def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
-    """初始化資料庫，只下載前 20 筆 tickers"""
+    """初始化資料庫，只下載前 100 筆 tickers，並檢查現有數據"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -147,10 +147,10 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         cursor.execute("DELETE FROM stocks")
         cursor.execute("DELETE FROM metadata")
         
-        # 只取前 20 筆 tickers
-        tickers = tickers[:20]
-        logger.info(f"初始化資料庫，只處理前 20 筆股票：{tickers}")
-        st.write(f"初始化資料庫，只處理前 20 筆股票：{tickers}")
+        # 只取前 100 筆 tickers
+        tickers = tickers[:100]
+        logger.info(f"初始化資料庫，只處理前 100 筆股票：{tickers}")
+        st.write(f"初始化資料庫，只處理前 100 筆股票：{tickers}")
         
         current_date = datetime.now().date()
         end_date = current_date - timedelta(days=1)  # 確保結束日期不過未來
@@ -163,9 +163,21 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         logger.info(f"初始化資料庫，日期範圍：{start_date} 至 {end_date}")
         st.write(f"初始化資料庫，日期範圍：{start_date} 至 {end_date}")
         
-        total_batches = (len(tickers) + batch_size - 1) // batch_size
-        for i in range(0, len(tickers), batch_size):
-            batch_tickers = tickers[i:i + batch_size]
+        # 檢查現有股票
+        existing_tickers = pd.read_sql_query("SELECT DISTINCT Ticker FROM stocks", conn)['Ticker'].tolist()
+        tickers_to_download = [ticker for ticker in tickers if ticker not in existing_tickers]
+        if not tickers_to_download:
+            logger.info("所有股票已存在於資料庫中，無需下載")
+            st.write("所有股票已存在於資料庫中，無需下載")
+            conn.close()
+            return False
+        
+        logger.info(f"需下載的股票：{tickers_to_download}")
+        st.write(f"需下載的股票：{tickers_to_download}")
+        
+        total_batches = (len(tickers_to_download) + batch_size - 1) // batch_size
+        for i in range(0, len(tickers_to_download), batch_size):
+            batch_tickers = tickers_to_download[i:i + batch_size]
             batch_num = i // batch_size + 1
             st.write(f"初始化：下載批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票：{batch_tickers})")
             
@@ -221,7 +233,7 @@ def initialize_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         return False
 
 def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
-    """更新資料庫，只下載前 20 筆 tickers，修復日期邏輯"""
+    """更新資料庫，只下載前 100 筆 tickers，並檢查現有數據"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -231,10 +243,10 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # 只取前 20 筆 tickers
-        tickers = tickers[:20]
-        logger.info(f"更新資料庫，只處理前 20 筆股票：{tickers}")
-        st.write(f"更新資料庫，只處理前 20 筆股票：{tickers}")
+        # 只取前 100 筆 tickers
+        tickers = tickers[:100]
+        logger.info(f"更新資料庫，只處理前 100 筆股票：{tickers}")
+        st.write(f"更新資料庫，只處理前 100 筆股票：{tickers}")
         
         current_date = datetime.now().date()
         end_date = current_date - timedelta(days=1)  # 確保結束日期不過未來
@@ -277,9 +289,21 @@ def update_database(tickers, db_path=DB_PATH, batch_size=20, repo=None):
         logger.info(f"更新資料庫，日期範圍：{start_date} 至 {end_date}")
         st.write(f"更新資料庫，日期範圍：{start_date} 至 {end_date}")
         
-        total_batches = (len(tickers) + batch_size - 1) // batch_size
-        for i in range(0, len(tickers), batch_size):
-            batch_tickers = tickers[i:i + batch_size]
+        # 檢查現有股票數據
+        existing_tickers = pd.read_sql_query(f"SELECT DISTINCT Ticker FROM stocks WHERE Date >= '{start_date}' AND Date <= '{end_date}'", conn)['Ticker'].tolist()
+        tickers_to_download = [ticker for ticker in tickers if ticker not in existing_tickers]
+        if not tickers_to_download:
+            logger.info("所有股票在此日期範圍內已有數據，無需下載")
+            st.write("所有股票在此日期範圍內已有數據，無需下載")
+            conn.close()
+            return False
+        
+        logger.info(f"需下載的股票：{tickers_to_download}")
+        st.write(f"需下載的股票：{tickers_to_download}")
+        
+        total_batches = (len(tickers_to_download) + batch_size - 1) // batch_size
+        for i in range(0, len(tickers_to_download), batch_size):
+            batch_tickers = tickers_to_download[i:i + batch_size]
             batch_num = i // batch_size + 1
             st.write(f"更新：下載批次 {batch_num}/{total_batches} ({len(batch_tickers)} 檔股票：{batch_tickers})")
             
@@ -360,7 +384,7 @@ def fetch_stock_data(tickers, stock_pool=None, db_path=DB_PATH, trading_days=70)
         return None
 
 def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
-    """擴展 S&P 500 股票數據，只下載前 20 筆 tickers"""
+    """擴展 S&P 500 股票數據，只下載前 100 筆 tickers，並檢查現有數據"""
     if repo is None:
         logger.error("未提供 Git 倉庫物件，無法推送至 GitHub")
         st.error("未提供 Git 倉庫物件，無法推送至 GitHub")
@@ -368,9 +392,18 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
 
     try:
         conn = sqlite3.connect(db_path)
-        existing_tickers = pd.read_sql_query("SELECT DISTINCT Ticker FROM stocks", conn)['Ticker'].tolist()
-        # 只取前 20 筆 tickers_sp500
-        tickers_sp500 = tickers_sp500[:20]
+        cursor = conn.cursor()
+        
+        # 只取前 100 筆 tickers_sp500
+        tickers_sp500 = tickers_sp500[:100]
+        logger.info(f"檢查 S&P 500 前 100 筆股票：{tickers_sp500}")
+        st.write(f"檢查 S&P 500 前 100 筆股票：{tickers_sp500}")
+        
+        end_date = datetime.now().date() - timedelta(days=1)
+        start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
+        
+        # 檢查現有股票
+        existing_tickers = pd.read_sql_query(f"SELECT DISTINCT Ticker FROM stocks WHERE Date >= '{start_date}' AND Date <= '{end_date}'", conn)['Ticker'].tolist()
         missing_tickers = [ticker for ticker in tickers_sp500 if ticker not in existing_tickers]
         
         if not missing_tickers:
@@ -380,8 +413,6 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
             return False
         
         st.write(f"檢測到 {len(missing_tickers)} 隻 S&P 500 股票缺失，正在補充，股票：{missing_tickers}")
-        end_date = datetime.now().date() - timedelta(days=1)
-        start_date = nasdaq.schedule(start_date=end_date - timedelta(days=180), end_date=end_date).index[0].date()
         logger.info(f"補充 S&P 500 股票，日期範圍：{start_date} 至 {end_date}")
         st.write(f"補充 S&P 500 股票，日期範圍：{start_date} 至 {end_date}")
         
@@ -412,7 +443,6 @@ def extend_sp500(tickers_sp500, db_path=DB_PATH, batch_size=20, repo=None):
             pivoted_df = pd.concat(all_data, ignore_index=True)
             pivoted_df['Date'] = pd.to_datetime(pivoted_df['Date']).dt.strftime('%Y-%m-%d')
             
-            cursor = conn.cursor()
             for _, row in pivoted_df.iterrows():
                 cursor.execute('''INSERT OR REPLACE INTO stocks 
                     (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
