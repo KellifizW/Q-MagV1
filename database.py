@@ -12,15 +12,26 @@ import logging
 from typing import Optional, List, Dict, Tuple, Any
 import warnings
 import urllib3
+from yfinance import utils
 
 # 配置日誌記錄
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # 優化 yfinance 設置
-yf.set_tz_cache_location("/tmp/py-yfinance")  # 設置自定義緩存位置
-urllib3.disable_warnings()
-http = urllib3.PoolManager(maxsize=10)  # 控制連接池大小
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+utils.get_session().close()
+utils.set_session(requests.Session())
+
+# 調整連接池參數
+session = utils.get_session()
+adapter = requests.adapters.HTTPAdapter(
+    pool_connections=20,
+    pool_maxsize=20,
+    max_retries=3
+)
+session.mount('http://', adapter)
+session.mount('https://', adapter)
 
 # 常數配置
 REPO_DIR = "."
@@ -28,10 +39,10 @@ DB_PATH = "stocks.db"
 TICKERS_CSV = "Tickers.csv"
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
-YF_BATCH_SIZE = 10  # 減少批量大小以優化連接池
-MS_BATCH_SIZE = 100  # Marketstack 批量大小
-MONTHLY_REQUEST_LIMIT = 100  # Marketstack 免費層每月限制
-MAX_HISTORY_DAYS = 90  # 最大歷史數據天數
+YF_BATCH_SIZE = 10
+MS_BATCH_SIZE = 100
+MONTHLY_REQUEST_LIMIT = 100
+MAX_HISTORY_DAYS = 90
 
 # Streamlit 日誌顯示
 def log_to_page(message: str, level: str = "INFO") -> None:
@@ -213,30 +224,35 @@ def download_with_retry(
 
 # 批量插入數據到數據庫
 def bulk_insert_data(df: pd.DataFrame, db_conn: sqlite3.Connection) -> bool:
-    """高效批量插入數據到數據庫"""
+    """使用 INSERT OR IGNORE 高效批量插入數據"""
     if df.empty:
         return True
 
     try:
-        # 確保 DataFrame 列匹配表結構
+        # 標準化列順序和名稱
         expected_columns = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Adj_Close', 'Volume']
-        df = df[expected_columns]  # 強制按預期順序排列
+        df = df[expected_columns].copy()  # 顯式copy避免碎片化警告
         
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', message='Adjusted DataFrame columns')
-            df.to_sql('stocks', db_conn, if_exists='append', index=False, 
-                     dtype={
-                         'Date': 'TEXT',
-                         'Ticker': 'TEXT',
-                         'Open': 'REAL',
-                         'High': 'REAL',
-                         'Low': 'REAL',
-                         'Close': 'REAL',
-                         'Adj_Close': 'REAL',
-                         'Volume': 'INTEGER'
-                     })
+        # 使用臨時表+INSERT OR IGNORE方案
+        df.to_sql('temp_stocks', db_conn, if_exists='replace', index=False)
+        
+        # 執行批量INSERT OR IGNORE
+        db_conn.execute("""
+            INSERT OR IGNORE INTO stocks
+            SELECT * FROM temp_stocks
+        """)
+        
+        # 清理臨時表
+        db_conn.execute("DROP TABLE temp_stocks")
         db_conn.commit()
+        
+        logger.info(f"成功插入 {db_conn.total_changes} 條記錄")
         return True
+        
+    except sqlite3.IntegrityError as e:
+        logger.error(f"唯一性約束錯誤: {str(e)}")
+        db_conn.rollback()
+        return False
     except Exception as e:
         logger.error(f"批量插入失敗: {str(e)}")
         db_conn.rollback()
