@@ -10,6 +10,16 @@ import logging
 from pytz import timezone
 import requests
 
+if os.path.exists(DB_PATH):
+    with open(DB_PATH, "rb") as file:
+        st.download_button(
+            label="檢查用-下載 stocks.db",
+            data=file,
+            file_name="stocks.db",
+            mime="application/octet-stream",
+            key="download_db"
+        )
+
 # 設置日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
