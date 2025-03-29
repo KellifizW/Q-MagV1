@@ -39,14 +39,14 @@ class GitRepoManager:
             logger.error(f"配置 LFS 追蹤失敗：{e.stderr}")
             raise
 
-    def push(self, message="Update stocks.db"):
+    def push(self, db_path, message="Update stocks.db"):
         """推送至 GitHub"""
         try:
-            if not os.path.exists(DB_PATH):
-                st.error(f"stocks.db 不存在於路徑：{DB_PATH}")
+            if not os.path.exists(db_path):
+                st.error(f"資料庫檔案 {db_path} 不存在，無法推送")
                 return False
 
-            subprocess.run(['git', 'add', DB_PATH], check=True, capture_output=True, text=True)
+            subprocess.run(['git', 'add', db_path], check=True, capture_output=True, text=True)
             status = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True)
             if not status.stdout:
                 st.write("無變更需要推送")
