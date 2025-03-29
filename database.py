@@ -15,7 +15,7 @@ DB_PATH = "stocks.db"
 TICKERS_CSV = "Tickers.csv"
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
-BATCH_SIZE = 5  # 減少批次大小以避免 Alpha Vantage 速率限制
+BATCH_SIZE = 5
 
 # 使用 Streamlit 顯示日誌
 def log_to_page(message, level="INFO"):
@@ -29,7 +29,6 @@ def log_to_page(message, level="INFO"):
         st.write(f"DEBUG: {message}")
 
 def safe_float(value, column_name, ticker, date):
-    """安全轉換為浮點數，記錄詳細錯誤"""
     try:
         if pd.isna(value):
             return None
@@ -39,7 +38,6 @@ def safe_float(value, column_name, ticker, date):
         raise ValueError(f"Invalid {column_name} value for {ticker} on {date}: {repr(value)}")
 
 def safe_int(value, column_name, ticker, date):
-    """安全轉換為整數，記錄詳細錯誤"""
     try:
         if pd.isna(value):
             return 0
@@ -49,11 +47,11 @@ def safe_int(value, column_name, ticker, date):
         raise ValueError(f"Invalid {column_name} value for {ticker} on {date}: {repr(value)}")
 
 def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
-    """下載股票數據，優先 yfinance，失敗則切換 Alpha Vantage"""
-    # 首先嘗試 yfinance，並強制失敗
+    """下載股票數據，強制 yfinance 失敗以測試 Alpha Vantage"""
+    # 強制 yfinance 失敗
     for attempt in range(retries):
         try:
-            raise Exception("強制 yfinance 失敗")  # 強制 yfinance 失敗以測試 Alpha Vantage
+            raise Exception("強制 yfinance 失敗")  # 強制失敗以切換到 Alpha Vantage
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
                 log_to_page(f"批次數據為空，股票：{tickers}", "WARNING")
@@ -64,7 +62,7 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
             log_to_page(f"yfinance 下載失敗，股票：{tickers}，錯誤：{str(e)}，重試 {attempt + 1}/{retries}", "WARNING")
             time.sleep(delay)
 
-    # 如果 yfinance 失敗，切換到 Alpha Vantage
+    # 切換到 Alpha Vantage
     if not api_key:
         log_to_page(f"未提供 Alpha Vantage API Key，下載 {tickers} 失敗", "ERROR")
         return None
@@ -112,7 +110,6 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
                 df['Adj Close'] = df['Close']
                 df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
                 
-                # 過濾日期範圍
                 df = df[df['Date'] >= cutoff_date]
                 
                 for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
@@ -122,7 +119,7 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
                 
                 all_data.append(df[['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume', 'Ticker']])
                 log_to_page(f"成功下載股票 {ticker} 的數據 (Alpha Vantage)", "INFO")
-                time.sleep(12)  # 每分鐘 5 次請求，每 12 秒一次
+                time.sleep(12)  # 每分鐘 5 次請求
                 break
             except Exception as e:
                 log_to_page(f"Alpha Vantage 下載股票 {ticker} 失敗，錯誤：{str(e)}，重試 {attempt + 1}/{retries}", "WARNING")
@@ -140,7 +137,6 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
     return combined_df
 
 def init_repo():
-    """初始化 Git 倉庫"""
     try:
         os.chdir(REPO_DIR)
         if not os.path.exists('.git'):
@@ -165,7 +161,6 @@ def init_repo():
         return None
 
 def push_to_github(repo, message="Update stocks.db"):
-    """推送變更到 GitHub"""
     try:
         os.chdir(REPO_DIR)
         if not os.path.exists(DB_PATH):
@@ -189,7 +184,6 @@ def push_to_github(repo, message="Update stocks.db"):
         return False
 
 def init_database():
-    """從 GitHub 下載初始資料庫或創建新資料庫"""
     if 'db_initialized' not in st.session_state:
         try:
             token = st.secrets["TOKEN"]
@@ -214,18 +208,15 @@ def init_database():
             st.session_state['db_initialized'] = False
 
 def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo=None, check_percentage=0.1, lookback_days=30):
-    """增量更新資料庫，包含完整性檢查"""
     if repo is None:
         st.error("未提供 Git 倉庫物件")
         return False
 
     try:
-        # 讀取股票清單
         tickers_df = pd.read_csv(tickers_file)
         tickers = tickers_df['Ticker'].tolist()
         log_to_page(f"從 {tickers_file} 讀取 {len(tickers)} 檔股票", "INFO")
 
-        # 連接到資料庫
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         cursor.execute('''CREATE TABLE IF NOT EXISTS stocks (
@@ -234,17 +225,14 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
         conn.commit()
 
-        # 檢查最後更新日期
         cursor.execute("SELECT last_updated FROM metadata")
         last_updated = cursor.fetchone()
         current_date = datetime.now(US_EASTERN).date()
         end_date = current_date - timedelta(days=1)
         
-        # 獲取現有股票的最後日期
         ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
         existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date']).dt.date))
 
-        # 檢查完整性
         num_to_check = max(1, int(len(tickers) * check_percentage))
         tickers_to_check = tickers[-num_to_check:]
         tickers_to_update = []
@@ -272,7 +260,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 conn.close()
                 return True
 
-        # 分批下載並更新
         try:
             api_key = st.secrets["ALPHA_VANTAGE_API_KEY"]
             log_to_page(f"獲取的 Alpha Vantage API Key: {api_key}", "INFO")
@@ -284,6 +271,9 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             return False
 
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
         for i in range(0, len(tickers_to_update), batch_size):
             batch_tickers = tickers_to_update[i:i + batch_size]
             batch_start_dates = [
@@ -296,7 +286,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 log_to_page(f"批次 {i // batch_size + 1}/{total_batches} 下載失敗，跳過", "WARNING")
                 continue
 
-            # 重置索引並處理 MultiIndex
             df = data.reset_index()
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = ['_'.join(col).strip('_') if col[1] else col[0] for col in df.columns]
@@ -311,7 +300,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                     ticker_df['Ticker'] = ticker
                     ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
                     
-                    # 檢查必要欄位
                     required_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
                     missing_cols = [col for col in required_cols if col not in ticker_df.columns]
                     if missing_cols:
@@ -342,21 +330,20 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                     continue
 
             conn.commit()
-            st.write(f"批次 {i // batch_size + 1}/{total_batches} 完成")
+            progress = (i + batch_size) / len(tickers_to_update)
+            progress_bar.progress(min(progress, 1.0))
+            status_text.text(f"批次 {i // batch_size + 1}/{total_batches} 完成")
 
-        # 更新 metadata
         cursor.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
         conn.commit()
         conn.close()
 
-        # 推送至 GitHub
         push_success = push_to_github(repo, f"Updated stocks.db with new data")
         if push_success:
             st.success("資料庫更新完成並成功推送至 GitHub")
         else:
             st.warning("資料庫更新完成，但推送至 GitHub 失敗")
         
-        # 提供手動推送和下載選項
         col1, col2 = st.columns(2)
         with col1:
             if st.button("手動推送至 GitHub", key="manual_push"):
@@ -387,7 +374,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         return False
 
 def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
-    """從資料庫提取股票數據"""
     try:
         if not os.path.exists(db_path):
             st.error(f"資料庫檔案 {db_path} 不存在，請先初始化或更新資料庫")
@@ -415,6 +401,10 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
 if __name__ == "__main__":
     st.title("股票資料庫更新工具")
     repo = init_repo()
-    init_database()
+    
+    if st.button("初始化並更新資料庫"):
+        init_database()
+        update_database(repo=repo)
+    
     if st.button("更新資料庫"):
         update_database(repo=repo)
