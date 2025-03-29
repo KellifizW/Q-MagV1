@@ -23,27 +23,31 @@ US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 20
 
 def safe_float(value, column_name, ticker, date):
-    """安全轉換為浮點數，記錄錯誤"""
+    """安全轉換為浮點數，記錄詳細錯誤"""
     try:
-        return float(value) if pd.notna(value) else None
+        if pd.isna(value):
+            return None
+        return float(value)
     except (ValueError, TypeError) as e:
-        logger.error(f"無法將 {column_name} 轉換為浮點數，股票：{ticker}，日期：{date}，值：{value}，錯誤：{str(e)}")
-        return None
+        logger.error(f"無法將 {column_name} 轉換為浮點數，股票：{ticker}，日期：{date}，值：{repr(value)}，錯誤：{str(e)}")
+        raise ValueError(f"Invalid {column_name} value for {ticker} on {date}: {repr(value)}")
 
 def safe_int(value, column_name, ticker, date):
-    """安全轉換為整數，記錄錯誤"""
+    """安全轉換為整數，記錄詳細錯誤"""
     try:
-        return int(value) if pd.notna(value) else 0
+        if pd.isna(value):
+            return 0
+        return int(value)
     except (ValueError, TypeError) as e:
-        logger.error(f"無法將 {column_name} 轉換為整數，股票：{ticker}，日期：{date}，值：{value}，錯誤：{str(e)}")
-        return 0
+        logger.error(f"無法將 {column_name} 轉換為整數，股票：{ticker}，日期：{date}，值：{repr(value)}，錯誤：{str(e)}")
+        raise ValueError(f"Invalid {column_name} value for {ticker} on {date}: {repr(value)}")
 
 def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
     """下載股票數據，優先 yfinance，失敗則切換 Alpha Vantage"""
     # 首先嘗試 yfinance
     for attempt in range(retries):
         try:
-            raise Exception("強制 yfinance 失敗")  # 你測試時強制失敗，正式使用時可移除
+            raise Exception("強制 yfinance 失敗")  # 測試用，正式運行可移除
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
                 logger.warning(f"批次數據為空，股票：{tickers}")
@@ -80,7 +84,7 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
                 '5. volume': 'Volume'
             })
             df['Ticker'] = ticker
-            df['Adj Close'] = df['Close']  # Alpha Vantage 無 Adj Close，用 Close 替代
+            df['Adj Close'] = df['Close']
             df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
             
             # 檢查數據有效性
@@ -90,13 +94,8 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
                 logger.error(f"Alpha Vantage 返回的數據缺少欄位：{missing_cols}，股票：{ticker}")
                 continue
             
-            # 檢查數值欄位是否有效
-            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-                if not pd.to_numeric(df[col], errors='coerce').notna().all():
-                    logger.warning(f"股票 {ticker} 的 {col} 欄位包含無效值，將被轉換為 NaN 或 0")
-            
             all_data.append(df[['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume', 'Ticker']])
-            time.sleep(1)  # 避免超過 Alpha Vantage 免費版速率限制
+            time.sleep(1)
 
         if not all_data:
             logger.error(f"Alpha Vantage 下載 {tickers} 失敗，無有效數據")
@@ -215,7 +214,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
         existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date']).dt.date))
 
-        # 檢查完整性：根據指定比例從末尾開始檢查
+        # 檢查完整性
         num_to_check = max(1, int(len(tickers) * check_percentage))
         tickers_to_check = tickers[-num_to_check:]
         tickers_to_update = []
@@ -223,9 +222,9 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
         for ticker in tickers_to_check:
             last_date = existing_tickers.get(ticker)
-            if not last_date:  # 缺少股票數據
+            if not last_date:
                 tickers_to_update.append(ticker)
-            elif (end_date - last_date).days > 0:  # 數據不是最新的
+            elif (end_date - last_date).days > 0:
                 tickers_to_update.append(ticker)
 
         if not tickers_to_update:
@@ -253,9 +252,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         except KeyError as e:
             st.error(f"未找到 ALPHA_VANTAGE_API_KEY 於 st.secrets 中：{str(e)}")
             return False
-        except Exception as e:
-            st.error(f"獲取 Alpha Vantage API Key 失敗：{str(e)}")
-            return False
 
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
         for i in range(0, len(tickers_to_update), batch_size):
@@ -270,32 +266,50 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 logger.warning(f"批次 {i // batch_size + 1}/{total_batches} 下載失敗，跳過")
                 continue
 
+            # 重置索引並處理 MultiIndex
             df = data.reset_index()
             if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in df.columns]
+                df.columns = ['_'.join(col).strip('_') if col[1] else col[0] for col in df.columns]
 
             for ticker in batch_tickers:
-                ticker_df = df[[col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
-                ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
-                ticker_df['Ticker'] = ticker
-                ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
-                
                 try:
+                    ticker_df = df[[col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
+                    if ticker_df.empty:
+                        logger.warning(f"股票 {ticker} 的數據為空，跳過")
+                        continue
+                    ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
+                    ticker_df['Ticker'] = ticker
+                    ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
+                    
+                    # 檢查必要欄位
+                    required_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
+                    missing_cols = [col for col in required_cols if col not in ticker_df.columns]
+                    if missing_cols:
+                        logger.error(f"股票 {ticker} 缺少必要欄位：{missing_cols}")
+                        continue
+
                     for _, row in ticker_df.iterrows():
-                        cursor.execute('''INSERT OR IGNORE INTO stocks 
-                            (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
-                            row['Date'], ticker,
-                            safe_float(row['Open'], 'Open', ticker, row['Date']),
-                            safe_float(row['High'], 'High', ticker, row['Date']),
-                            safe_float(row['Low'], 'Low', ticker, row['Date']),
-                            safe_float(row['Close'], 'Close', ticker, row['Date']),
-                            safe_float(row['Close'], 'Close', ticker, row['Date']),
-                            safe_int(row['Volume'], 'Volume', ticker, row['Date'])
-                        ))
+                        try:
+                            cursor.execute('''INSERT OR IGNORE INTO stocks 
+                                (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
+                                row['Date'], ticker,
+                                safe_float(row['Open'], 'Open', ticker, row['Date']),
+                                safe_float(row['High'], 'High', ticker, row['Date']),
+                                safe_float(row['Low'], 'Low', ticker, row['Date']),
+                                safe_float(row['Close'], 'Close', ticker, row['Date']),
+                                safe_float(row['Close'], 'Close', ticker, row['Date']),
+                                safe_int(row['Volume'], 'Volume', ticker, row['Date'])
+                            ))
+                        except ValueError as e:
+                            logger.error(f"數據轉換失敗：{str(e)}")
+                            raise
+                        except sqlite3.Error as e:
+                            logger.error(f"SQLite 插入失敗，股票：{ticker}，日期：{row['Date']}，錯誤：{str(e)}")
+                            raise
                 except Exception as e:
-                    logger.error(f"插入股票 {ticker} 的數據失敗：{str(e)}")
-                    raise  # 拋出異常以便查看詳細錯誤
+                    logger.error(f"處理股票 {ticker} 的數據時失敗：{str(e)}")
+                    raise
 
             conn.commit()
             st.write(f"批次 {i // batch_size + 1}/{total_batches} 完成")
