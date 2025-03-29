@@ -27,12 +27,12 @@ def get_nasdaq_all(csv_tickers):
     """直接使用 csv_tickers，不擴展"""
     return csv_tickers
 
-def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40,min_rise_126=80, max_range=5, min_adr=5):
+def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, max_range=5, min_adr=5):
     results = []
     failed_stocks = {}
     matched_count = 0
     unmatched_count = 0
-    required_days = prior_days + consol_days + 30  # 60 天
+    required_days = max(prior_days + consol_days + 30, 126 + consol_days)  # 確保涵蓋 126 天需求
     
     for ticker in tickers:
         try:
@@ -41,23 +41,18 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                 failed_stocks[ticker] = f"stock 不是 DataFrame，類型為 {type(stock)}"
                 continue
             
-            close = pd.Series(stock['Close'])
-            volume = pd.Series(stock['Volume'])
-            high = pd.Series(stock['High'])
-            low = pd.Series(stock['Low'])
+            close = pd.Series(stock['Close']).dropna()
+            volume = pd.Series(stock['Volume']).dropna()
+            high = pd.Series(stock['High']).dropna()
+            low = pd.Series(stock['Low']).dropna()
             prev_close = close.shift(1)
             dates = stock.index
             
-            if close.isna().all() or len(close) < required_days:
-                failed_stocks[ticker] = f"數據不足或無效，長度 {len(close)}，需 {required_days}"
+            if len(close) < required_days:
+                failed_stocks[ticker] = f"數據長度不足，長度 {len(close)}，需 {required_days}"
                 continue
             
-            # 檢查有效數據點數
-            valid_close_count = close.notna().sum()
-            if valid_close_count < 67:
-                failed_stocks[ticker] = f"有效數據點不足（僅 {valid_close_count} 天，需至少 67 天），總長度 {len(close)}"
-                continue
-            
+            # 計算漲幅並檢查是否有效
             close_shift_22 = close.shift(22)
             close_shift_67 = close.shift(67)
             close_shift_126 = close.shift(126)
@@ -65,10 +60,20 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             rise_67 = (close / close_shift_67 - 1) * 100
             rise_126 = (close / close_shift_126 - 1) * 100
             
-            if rise_22.isna().all() or rise_67.isna().all() or rise_126.isna().all():
-                failed_stocks[ticker] = f"無法計算漲幅，可能因數據缺失，總長度 {len(close)}，有效數據點 {valid_close_count}"
+            # 添加除錯訊息
+            st.write(f"{ticker} - 22日數據點: {close_shift_22.notna().sum()}, 67日數據點: {close_shift_67.notna().sum()}, 126日數據點: {close_shift_126.notna().sum()}")
+            
+            if rise_126.isna().all():
+                failed_stocks[ticker] = f"無法計算 126 日漲幅，數據長度 {len(close)}，有效 126 日前數據點 {close_shift_126.notna().sum()}"
+                continue
+            if rise_67.isna().all():
+                failed_stocks[ticker] = f"無法計算 67 日漲幅，數據長度 {len(close)}，有效 67 日前數據點 {close_shift_67.notna().sum()}"
+                continue
+            if rise_22.isna().all():
+                failed_stocks[ticker] = f"無法計算 22 日漲幅，數據長度 {len(close)}，有效 22 日前數據點 {close_shift_22.notna().sum()}"
                 continue
             
+            # 後續計算邏輯保持不變
             recent_high = close.rolling(consol_days).max()
             recent_low = close.rolling(consol_days).min()
             consolidation_range = (recent_high / recent_low - 1) * 100
@@ -78,7 +83,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             breakout = (close > recent_high.shift(1)) & (close.shift(1) <= recent_high.shift(1))
             breakout_volume = volume > volume.rolling(10).mean() * 1.5
             
-            mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & (rise_126 >= min_rise_126) \
+            mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & (rise_126 >= min_rise_126) & \
                    (consolidation_range <= max_range) & (adr >= min_adr)
             
             if mask.any():
@@ -104,14 +109,15 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                 
         except Exception as e:
             failed_stocks[ticker] = f"分析失敗：{str(e)}"
+            st.write(f"{ticker} 分析失敗：{str(e)}")
     
     if failed_stocks:
         st.warning(f"無法分析的股票：{failed_stocks}")
     
     total_analyzed = matched_count + unmatched_count + len(failed_stocks)
     st.write(f"\n分析統計：共分析 {total_analyzed} 隻股票，"
-             f"符合條件 {matched_count} 隻，不符合條件 {unmatched_count} 隻，"
-             f"無法分析 {len(failed_stocks)} 隻")
+             f"符合條件 {matched_count} 隻(The number of matched tickers)，不符合條件 {unmatched_count} 隻，"
+             f"無法分析 {len(failed_stocks)} 隻(The number of tickers failed to analyze)")
     
     if results:
         combined_results = pd.concat(results)
