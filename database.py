@@ -375,7 +375,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, yf_batch_size=YF_
             conn.close()
         return False
 
-def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
+def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=140):  # 調整為 140 天
     try:
         if not os.path.exists(db_path):
             st.error(f"資料庫檔案 {db_path} 不存在，請先初始化或更新資料庫")
@@ -389,6 +389,8 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
         if data.empty:
             st.error(f"無數據：{tickers}")
             return None, tickers
+        
+        st.write(f"提取數據 - 股票數: {len(tickers)}, 數據長度: {len(data)}, 日期範圍: {data.index.min()} 至 {data.index.max()}")
         
         if not pd.api.types.is_datetime64_any_dtype(data.index):
             data.index = pd.to_datetime(data.index)
