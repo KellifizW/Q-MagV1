@@ -22,7 +22,7 @@ TICKERS_CSV = "Tickers.csv"
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
 YF_BATCH_SIZE = 20  # yfinance批次大小
-MS_BATCH_SIZE = 100  # Marketstack批次大小
+MS_BATCH_SIZE = 20  # Marketstack批次大小
 MONTHLY_REQUEST_LIMIT = 100  # Marketstack免费版每月限制
 MAX_HISTORY_DAYS = 90  # 最大历史数据天数
 
@@ -166,9 +166,8 @@ def download_with_retry(
 ) -> Optional[pd.DataFrame]:
     """带重试的数据下载"""
     for attempt in range(retries):
-        # 强制使用yfinance失败（测试用）
+        # 强制使用yfinance失败（測試用）
         try:
-            raise Exception("强制 yfinance 失败")
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
                 logger.warning(f"yfinance数据为空: {tickers}")
