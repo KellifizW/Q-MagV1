@@ -11,6 +11,7 @@ from pytz import timezone
 import logging
 from typing import Optional, List, Dict, Tuple, Any
 import warnings
+import urllib3
 
 # 配置日誌記錄
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 # 優化 yfinance 設置
 yf.set_tz_cache_location("/tmp/py-yfinance")  # 設置自定義緩存位置
+urllib3.disable_warnings()
+http = urllib3.PoolManager(maxsize=10)  # 控制連接池大小
 
 # 常數配置
 REPO_DIR = "."
