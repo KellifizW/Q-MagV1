@@ -50,10 +50,10 @@ def safe_int(value, column_name, ticker, date):
 
 def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
     """下載股票數據，優先 yfinance，失敗則切換 Alpha Vantage"""
-    # 首先嘗試 yfinance
+    # 首先嘗試 yfinance，並強制失敗
     for attempt in range(retries):
         try:
-            # raise Exception("強制 yfinance 失敗")  # 測試用，正式運行時請註解
+            raise Exception("強制 yfinance 失敗")  # 強制 yfinance 失敗以測試 Alpha Vantage
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
                 log_to_page(f"批次數據為空，股票：{tickers}", "WARNING")
