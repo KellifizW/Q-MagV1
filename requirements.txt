@@ -5,4 +5,3 @@ pandas_market_calendars
 plotly
 pygit2
 lxml
-magic
