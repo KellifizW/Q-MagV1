@@ -6,13 +6,8 @@ import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 import streamlit as st
-import logging
 import requests
 from pytz import timezone
-
-# 設置日誌
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 # 常量定義
 REPO_DIR = "."
@@ -20,7 +15,18 @@ DB_PATH = "stocks.db"
 TICKERS_CSV = "Tickers.csv"
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
-BATCH_SIZE = 20
+BATCH_SIZE = 5  # 減少批次大小以避免 Alpha Vantage 速率限制
+
+# 使用 Streamlit 顯示日誌
+def log_to_page(message, level="INFO"):
+    if level == "INFO":
+        st.info(message)
+    elif level == "WARNING":
+        st.warning(message)
+    elif level == "ERROR":
+        st.error(message)
+    elif level == "DEBUG":
+        st.write(f"DEBUG: {message}")
 
 def safe_float(value, column_name, ticker, date):
     """安全轉換為浮點數，記錄詳細錯誤"""
@@ -29,7 +35,7 @@ def safe_float(value, column_name, ticker, date):
             return None
         return float(value)
     except (ValueError, TypeError) as e:
-        logger.error(f"無法將 {column_name} 轉換為浮點數，股票：{ticker}，日期：{date}，值：{repr(value)}，錯誤：{str(e)}")
+        log_to_page(f"無法將 {column_name} 轉換為浮點數，股票：{ticker}，日期：{date}，值：{repr(value)}，錯誤：{str(e)}", "ERROR")
         raise ValueError(f"Invalid {column_name} value for {ticker} on {date}: {repr(value)}")
 
 def safe_int(value, column_name, ticker, date):
@@ -39,7 +45,7 @@ def safe_int(value, column_name, ticker, date):
             return 0
         return int(value)
     except (ValueError, TypeError) as e:
-        logger.error(f"無法將 {column_name} 轉換為整數，股票：{ticker}，日期：{date}，值：{repr(value)}，錯誤：{str(e)}")
+        log_to_page(f"無法將 {column_name} 轉換為整數，股票：{ticker}，日期：{date}，值：{repr(value)}，錯誤：{str(e)}", "ERROR")
         raise ValueError(f"Invalid {column_name} value for {ticker} on {date}: {repr(value)}")
 
 def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
@@ -50,20 +56,20 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
             # raise Exception("強制 yfinance 失敗")  # 測試用，正式運行時請註解
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
-                logger.warning(f"批次數據為空，股票：{tickers}")
+                log_to_page(f"批次數據為空，股票：{tickers}", "WARNING")
                 return None
-            logger.info(f"成功下載 {len(tickers)} 檔股票數據 (yfinance)")
+            log_to_page(f"成功下載 {len(tickers)} 檔股票數據 (yfinance)", "INFO")
             return data
         except Exception as e:
-            logger.warning(f"yfinance 下載失敗，股票：{tickers}，錯誤：{str(e)}，重試 {attempt + 1}/{retries}")
+            log_to_page(f"yfinance 下載失敗，股票：{tickers}，錯誤：{str(e)}，重試 {attempt + 1}/{retries}", "WARNING")
             time.sleep(delay)
 
     # 如果 yfinance 失敗，切換到 Alpha Vantage
     if not api_key:
-        logger.error(f"未提供 Alpha Vantage API Key，下載 {tickers} 失敗")
+        log_to_page(f"未提供 Alpha Vantage API Key，下載 {tickers} 失敗", "ERROR")
         return None
 
-    logger.info(f"yfinance 重試失敗，切換到 Alpha Vantage 嘗試下載 {tickers}")
+    log_to_page(f"yfinance 重試失敗，切換到 Alpha Vantage 嘗試下載 {tickers}", "INFO")
     all_data = []
     cutoff_date = start.strftime('%Y-%m-%d')
     
@@ -71,17 +77,17 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
         for attempt in range(retries):
             try:
                 url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&apikey={api_key}&outputsize=full"
-                logger.debug(f"請求 URL: {url}")
+                log_to_page(f"請求 Alpha Vantage，股票：{ticker}，URL：{url}", "DEBUG")
                 response = requests.get(url).json()
-                logger.debug(f"股票 {ticker} 的 API 回應: {response}")
+                log_to_page(f"股票 {ticker} 的 API 回應: {response}", "DEBUG")
                 
                 if "Time Series (Daily)" not in response:
                     if "Note" in response:
-                        logger.warning(f"Alpha Vantage API 限制，股票：{ticker}，訊息：{response['Note']}")
+                        log_to_page(f"Alpha Vantage API 限制，股票：{ticker}，訊息：{response['Note']}", "WARNING")
                     elif "Error Message" in response:
-                        logger.error(f"Alpha Vantage API 錯誤，股票：{ticker}，錯誤：{response['Error Message']}")
+                        log_to_page(f"Alpha Vantage API 錯誤，股票：{ticker}，錯誤：{response['Error Message']}", "ERROR")
                     else:
-                        logger.warning(f"Alpha Vantage 無數據返回，股票：{ticker}，回應：{response}")
+                        log_to_page(f"Alpha Vantage 無數據返回，股票：{ticker}，未知回應：{response}", "WARNING")
                     break
                 
                 time_series = response["Time Series (Daily)"]
@@ -99,7 +105,7 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
                 required_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
                 missing_cols = [col for col in required_cols if col not in df.columns]
                 if missing_cols:
-                    logger.error(f"Alpha Vantage 返回的數據缺少欄位：{missing_cols}，股票：{ticker}")
+                    log_to_page(f"Alpha Vantage 返回的數據缺少欄位：{missing_cols}，股票：{ticker}", "ERROR")
                     break
                 
                 df['Ticker'] = ticker
@@ -112,26 +118,25 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
                 for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
                     if df[col].isna().any():
-                        logger.warning(f"股票 {ticker} 的 {col} 欄位包含無效值，已轉換為 NaN")
+                        log_to_page(f"股票 {ticker} 的 {col} 欄位包含無效值，已轉換為 NaN", "WARNING")
                 
                 all_data.append(df[['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume', 'Ticker']])
-                logger.info(f"成功下載股票 {ticker} 的數據 (Alpha Vantage)")
-                time.sleep(1)  # Alpha Vantage API 速率限制
+                log_to_page(f"成功下載股票 {ticker} 的數據 (Alpha Vantage)", "INFO")
+                time.sleep(12)  # 每分鐘 5 次請求，每 12 秒一次
                 break
             except Exception as e:
-                logger.warning(f"Alpha Vantage 下載股票 {ticker} 失敗，錯誤：{str(e)}，重試 {attempt + 1}/{retries}")
+                log_to_page(f"Alpha Vantage 下載股票 {ticker} 失敗，錯誤：{str(e)}，重試 {attempt + 1}/{retries}", "WARNING")
                 time.sleep(delay)
         else:
-            logger.error(f"Alpha Vantage 下載股票 {ticker} 失敗，已達最大重試次數")
+            log_to_page(f"Alpha Vantage 下載股票 {ticker} 失敗，已達最大重試次數", "ERROR")
     
     if not all_data:
-        logger.error(f"Alpha Vantage 下載 {tickers} 失敗，無有效數據")
+        log_to_page(f"Alpha Vantage 下載 {tickers} 失敗，無有效數據", "ERROR")
         return None
     
     combined_df = pd.concat(all_data)
-    # 轉換為與 yfinance 相同的 MultiIndex 格式
     combined_df = combined_df.set_index(['Date', 'Ticker']).unstack('Ticker')
-    logger.info(f"成功下載 {len(tickers)} 檔股票數據 (Alpha Vantage)")
+    log_to_page(f"成功下載 {len(tickers)} 檔股票數據 (Alpha Vantage)", "INFO")
     return combined_df
 
 def init_repo():
@@ -140,7 +145,7 @@ def init_repo():
         os.chdir(REPO_DIR)
         if not os.path.exists('.git'):
             subprocess.run(['git', 'init'], check=True, capture_output=True, text=True)
-            logger.info("初始化 Git 倉庫")
+            log_to_page("初始化 Git 倉庫", "INFO")
 
         if "TOKEN" not in st.secrets:
             st.error("未找到 'TOKEN'，請在 Streamlit Cloud 的 Secrets 中配置")
@@ -153,7 +158,7 @@ def init_repo():
         
         subprocess.run(['git', 'config', 'user.name', 'KellifizW'], check=True)
         subprocess.run(['git', 'config', 'user.email', 'your.email@example.com'], check=True)
-        logger.info("Git 倉庫初始化完成")
+        log_to_page("Git 倉庫初始化完成", "INFO")
         return True
     except Exception as e:
         st.error(f"初始化 Git 倉庫失敗：{str(e)}")
@@ -218,7 +223,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         # 讀取股票清單
         tickers_df = pd.read_csv(tickers_file)
         tickers = tickers_df['Ticker'].tolist()
-        logger.info(f"從 {tickers_file} 讀取 {len(tickers)} 檔股票")
+        log_to_page(f"從 {tickers_file} 讀取 {len(tickers)} 檔股票", "INFO")
 
         # 連接到資料庫
         conn = sqlite3.connect(db_path)
@@ -270,7 +275,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         # 分批下載並更新
         try:
             api_key = st.secrets["ALPHA_VANTAGE_API_KEY"]
-            logger.info(f"獲取的 Alpha Vantage API Key: {api_key}")
+            log_to_page(f"獲取的 Alpha Vantage API Key: {api_key}", "INFO")
             if not api_key:
                 st.error("Alpha Vantage API Key 是空的，請檢查 st.secrets 配置")
                 return False
@@ -288,7 +293,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             start_date = min(batch_start_dates)
             data = download_with_retry(batch_tickers, start=start_date, end=end_date, api_key=api_key)
             if data is None:
-                logger.warning(f"批次 {i // batch_size + 1}/{total_batches} 下載失敗，跳過")
+                log_to_page(f"批次 {i // batch_size + 1}/{total_batches} 下載失敗，跳過", "WARNING")
                 continue
 
             # 重置索引並處理 MultiIndex
@@ -300,7 +305,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 try:
                     ticker_df = df[[col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
                     if ticker_df.empty:
-                        logger.warning(f"股票 {ticker} 的數據為空，跳過")
+                        log_to_page(f"股票 {ticker} 的數據為空，跳過", "WARNING")
                         continue
                     ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
                     ticker_df['Ticker'] = ticker
@@ -310,7 +315,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                     required_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
                     missing_cols = [col for col in required_cols if col not in ticker_df.columns]
                     if missing_cols:
-                        logger.error(f"股票 {ticker} 缺少必要欄位：{missing_cols}")
+                        log_to_page(f"股票 {ticker} 缺少必要欄位：{missing_cols}", "ERROR")
                         continue
 
                     for _, row in ticker_df.iterrows():
@@ -327,13 +332,13 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                                 safe_int(row['Volume'], 'Volume', ticker, row['Date'])
                             ))
                         except ValueError as e:
-                            logger.error(f"數據轉換失敗：{str(e)}")
+                            log_to_page(f"數據轉換失敗：{str(e)}", "ERROR")
                             continue
                         except sqlite3.Error as e:
-                            logger.error(f"SQLite 插入失敗，股票：{ticker}，日期：{row['Date']}，錯誤：{str(e)}")
+                            log_to_page(f"SQLite 插入失敗，股票：{ticker}，日期：{row['Date']}，錯誤：{str(e)}", "ERROR")
                             continue
                 except Exception as e:
-                    logger.error(f"處理股票 {ticker} 的數據時失敗：{str(e)}")
+                    log_to_page(f"處理股票 {ticker} 的數據時失敗：{str(e)}", "ERROR")
                     continue
 
             conn.commit()
@@ -405,3 +410,11 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
     except Exception as e:
         st.error(f"提取數據失敗：{str(e)}")
         return None, tickers
+
+# 主程式
+if __name__ == "__main__":
+    st.title("股票資料庫更新工具")
+    repo = init_repo()
+    init_database()
+    if st.button("更新資料庫"):
+        update_database(repo=repo)
