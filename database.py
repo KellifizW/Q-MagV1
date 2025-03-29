@@ -9,6 +9,8 @@ import streamlit as st
 import logging
 from pytz import timezone
 import requests
+import hashlib
+import magic  # 需要安裝 python-magic-bin (Windows)
 
 # 設置日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,6 +23,39 @@ TICKERS_CSV = "Tickers.csv"
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 10
+
+# 診斷資料庫檔案的函數
+def diagnose_db_file(db_path):
+    diagnostics = [f"檢查檔案：{os.path.abspath(db_path)}"]
+    
+    # 檢查檔案是否存在
+    if not os.path.exists(db_path):
+        diagnostics.append("錯誤：檔案不存在")
+        return diagnostics
+    
+    # 檢查檔案大小
+    file_size = os.path.getsize(db_path)
+    diagnostics.append(f"檔案大小：{file_size} 位元組")
+    if file_size == 0:
+        diagnostics.append("警告：檔案為空")
+
+    # 檢查檔案類型
+    try:
+        file_type = magic.from_file(db_path, mime=True)
+        diagnostics.append(f"檔案類型：{file_type}")
+        if file_type != "application/x-sqlite3":
+            diagnostics.append("警告：檔案不是 SQLite 資料庫格式")
+    except ImportError:
+        diagnostics.append("警告：未安裝 python-magic，無法檢查檔案類型")
+    except Exception as e:
+        diagnostics.append(f"檢查檔案類型失敗：{str(e)}")
+
+    # 計算檔案哈希值（檢查完整性）
+    with open(db_path, "rb") as f:
+        file_hash = hashlib.md5(f.read()).hexdigest()
+    diagnostics.append(f"檔案 MD5 哈希值：{file_hash}")
+
+    return diagnostics
 
 def download_with_retry(tickers, start, end, retries=2, delay=60):
     """使用 yfinance 下載數據，失敗後等待指定秒數後重試"""
@@ -110,10 +145,17 @@ def init_database():
                 with open(DB_PATH, "wb") as f:
                     f.write(response.content)
                 # 驗證檔案是否為有效資料庫
-                conn = sqlite3.connect(DB_PATH)
-                conn.execute("SELECT 1 FROM sqlite_master LIMIT 1")  # 測試是否可查詢
-                conn.close()
-                st.write("已從 GitHub 下載 stocks.db")
+                diagnostics = diagnose_db_file(DB_PATH)
+                st.write("檔案診斷資訊：")
+                for line in diagnostics:
+                    st.write(line)
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.execute("SELECT 1 FROM sqlite_master LIMIT 1")  # 測試是否可查詢
+                    conn.close()
+                    st.write("已從 GitHub 下載 stocks.db")
+                except sqlite3.DatabaseError as e:
+                    raise sqlite3.DatabaseError(f"資料庫驗證失敗：{str(e)}\n診斷資訊：{diagnostics}")
             else:
                 st.write("未找到遠端 stocks.db，將創建新資料庫")
                 conn = sqlite3.connect(DB_PATH)
@@ -125,7 +167,10 @@ def init_database():
                 conn.close()
             st.session_state['db_initialized'] = True
         except sqlite3.DatabaseError as e:
-            st.error(f"下載的 stocks.db 無效：{str(e)}，將創建新資料庫")
+            st.error(f"下載的 stocks.db 無效：{str(e)}")
+            st.write("將創建新資料庫")
+            if os.path.exists(DB_PATH):
+                os.remove(DB_PATH)  # 移除無效檔案
             conn = sqlite3.connect(DB_PATH)
             conn.execute('''CREATE TABLE IF NOT EXISTS stocks (
                 Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
@@ -145,11 +190,12 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         return False
 
     try:
-        # 讀取股票清單
-        tickers_df = pd.read_csv(tickers_file)
-        tickers = tickers_df['Ticker'].tolist()
-        logger.info(f"從 {tickers_file} 讀取 {len(tickers)} 檔股票")
-
+        # 檢查檔案並診斷
+        diagnostics = diagnose_db_file(db_path)
+        st.write("資料庫檔案診斷資訊：")
+        for line in diagnostics:
+            st.write(line)
+        
         # 連接到資料庫
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
@@ -158,6 +204,11 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             PRIMARY KEY (Date, Ticker))''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
         conn.commit()
+
+        # 讀取股票清單
+        tickers_df = pd.read_csv(tickers_file)
+        tickers = tickers_df['Ticker'].tolist()
+        logger.info(f"從 {tickers_file} 讀取 {len(tickers)} 檔股票")
 
         # 檢查最後更新日期
         cursor.execute("SELECT last_updated FROM metadata")
@@ -170,12 +221,11 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         # 獲取現有股票的最後日期
         ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
         logger.info(f"從資料庫中讀取 {len(ticker_dates)} 檔股票的最後日期")
-        # 確保日期格式一致
         ticker_dates['last_date'] = pd.to_datetime(ticker_dates['last_date'], errors='coerce').dt.strftime('%Y-%m-%d')
         logger.info(f"日期樣本（前5）：{ticker_dates['last_date'].head().tolist()}")
         existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date']).dt.date))
 
-        # 檢查完整性：根據指定比例從末尾開始檢查
+        # 檢查完整性
         num_to_check = max(1, int(len(tickers) * check_percentage))
         tickers_to_check = tickers[-num_to_check:]
         tickers_to_update = []
@@ -209,9 +259,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
         # 分批下載並更新
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
-        logger.info(f"發現 {len(tickers_to_update)} 檔股票需要更新，範圍從 {min(existing_tickers.values(), default=end_date)} 至 {end_date}")
-
-        # 初始化進度條
         progress_bar = st.progress(0)
         for i in range(0, len(tickers_to_update), batch_size):
             batch_tickers = tickers_to_update[i:i + batch_size]
@@ -235,11 +282,9 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 ticker_df = df[[col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
                 ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
                 ticker_df['Ticker'] = ticker
-                # 確保日期格式為純日期
                 ticker_df['Date'] = pd.to_datetime(ticker_df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
                 logger.info(f"股票 {ticker} 下載數據日期樣本（前5）：{ticker_df['Date'].head().tolist()}")
 
-                # 驗證日期格式
                 if not ticker_df['Date'].str.match(r'^\d{4}-\d{2}-\d{2}$').all():
                     logger.error(f"股票 {ticker} 的日期格式不正確：{ticker_df['Date'].head().tolist()}")
                     st.error(f"股票 {ticker} 的日期格式不正確，請檢查數據來源")
@@ -258,23 +303,21 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                         int(row['Volume']) if pd.notna(row['Volume']) else 0))
 
             conn.commit()
-            st.write(f"批次 {i // batch_size + 1}/{total_batches} 完成")
+            progress = (i + batch_size) / len(tickers_to_update)
+            progress_bar.progress(min(progress, 1.0))
             logger.info(f"批次 {i // batch_size + 1}/{total_batches} 已寫入資料庫")
 
-        # 更新 metadata
         cursor.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
         conn.commit()
         conn.close()
         logger.info(f"資料庫 metadata 更新，最後更新日期：{end_date}")
 
-        # 推送至 GitHub 並顯示結果
         push_success = push_to_github(repo, f"Updated stocks.db with new data")
         if push_success:
             st.success("資料庫更新完成並成功推送至 GitHub")
         else:
             st.warning("資料庫更新完成，但推送至 GitHub 失敗")
-        
-        # 提供手動推送和下載選項
+
         col1, col2 = st.columns(2)
         with col1:
             if st.button("手動推送至 GitHub", key="manual_push"):
@@ -298,6 +341,14 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         
         return True
 
+    except sqlite3.DatabaseError as e:
+        diagnostics = diagnose_db_file(db_path)
+        error_msg = f"資料庫錯誤：{str(e)}\n診斷資訊：\n" + "\n".join(diagnostics)
+        st.error(error_msg)
+        logger.error(error_msg)
+        if 'conn' in locals():
+            conn.close()
+        return False
     except Exception as e:
         st.error(f"資料庫更新失敗：{str(e)}")
         logger.error(f"資料庫更新失敗，詳細錯誤：{str(e)}")
@@ -310,6 +361,11 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
         if not os.path.exists(db_path):
             st.error(f"資料庫檔案 {db_path} 不存在，請先初始化或更新資料庫")
             return None, tickers
+        diagnostics = diagnose_db_file(db_path)
+        st.write("提取數據前的檔案診斷資訊：")
+        for line in diagnostics:
+            st.write(line)
+        
         conn = sqlite3.connect(db_path)
         start_date = (datetime.now(US_EASTERN).date() - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
         query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?']*len(tickers))}) AND Date >= ?"
@@ -325,6 +381,17 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
         
         pivoted_data = data.pivot(columns='Ticker')
         return pivoted_data, tickers
+    except sqlite3.DatabaseError as e:
+        diagnostics = diagnose_db_file(db_path)
+        error_msg = f"提取數據失敗：{str(e)}\n診斷資訊：\n" + "\n".join(diagnostics)
+        st.error(error_msg)
+        return None, tickers
     except Exception as e:
         st.error(f"提取數據失敗：{str(e)}")
         return None, tickers
+
+if __name__ == "__main__":
+    # 示例運行，根據你的實際需求調整
+    repo = init_repo()
+    init_database()
+    update_database(repo=repo)
