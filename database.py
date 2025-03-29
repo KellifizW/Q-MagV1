@@ -47,7 +47,7 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
     # 首先嘗試 yfinance
     for attempt in range(retries):
         try:
-            raise Exception("強制 yfinance 失敗")  # 測試用，正式運行可移除
+            # raise Exception("強制 yfinance 失敗")  # 測試用，已移除，正式運行時請確保此行被註解或移除
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
                 logger.warning(f"批次數據為空，股票：{tickers}")
@@ -64,50 +64,72 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
         return None
 
     logger.info(f"yfinance 重試失敗，切換到 Alpha Vantage 嘗試下載 {tickers}")
-    try:
-        all_data = []
-        for ticker in tickers:
-            url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&apikey={api_key}&outputsize=full"
-            response = requests.get(url).json()
-            if "Time Series (Daily)" not in response:
-                logger.warning(f"Alpha Vantage 無數據返回，股票：{ticker}")
-                continue
-            
-            time_series = response["Time Series (Daily)"]
-            df = pd.DataFrame.from_dict(time_series, orient='index').reset_index()
-            df = df.rename(columns={
-                'index': 'Date',
-                '1. open': 'Open',
-                '2. high': 'High',
-                '3. low': 'Low',
-                '4. close': 'Close',
-                '5. volume': 'Volume'
-            })
-            df['Ticker'] = ticker
-            df['Adj Close'] = df['Close']
-            df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-            
-            # 檢查數據有效性
-            required_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
-            missing_cols = [col for col in required_cols if col not in df.columns]
-            if missing_cols:
-                logger.error(f"Alpha Vantage 返回的數據缺少欄位：{missing_cols}，股票：{ticker}")
-                continue
-            
-            all_data.append(df[['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume', 'Ticker']])
-            time.sleep(1)
-
-        if not all_data:
-            logger.error(f"Alpha Vantage 下載 {tickers} 失敗，無有效數據")
-            return None
-
-        combined_df = pd.concat(all_data)
-        combined_df = combined_df.set_index(['Date', 'Ticker']).unstack('Ticker')
-        logger.info(f"成功下載 {len(tickers)} 檔股票數據 (Alpha Vantage)")
-        return combined_df
-    except Exception as e:
-        logger.error(f"Alpha Vantage 下載 {tickers} 失敗，錯誤：{str(e)}")
+    all_data = []
+    cutoff_date = start.strftime('%Y-%m-%d')
+    
+    for ticker in tickers:
+        for attempt in range(retries):
+            try:
+                url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&apikey={api_key}&outputsize=full"
+                response = requests.get(url).json()
+                
+                if "Time Series (Daily)" not in response:
+                    logger.warning(f"Alpha Vantage 無數據返回，股票：{ticker}")
+                    if "Note" in response:
+                        logger.warning(f"API 訊息：{response['Note']}")
+                    elif "Error Message" in response:
+                        logger.error(f"API 錯誤：{response['Error Message']}")
+                    break
+                
+                time_series = response["Time Series (Daily)"]
+                df = pd.DataFrame.from_dict(time_series, orient='index').reset_index()
+                
+                df = df.rename(columns={
+                    'index': 'Date',
+                    '1. open': 'Open',
+                    '2. high': 'High',
+                    '3. low': 'Low',
+                    '4. close': 'Close',
+                    '5. volume': 'Volume'
+                })
+                
+                required_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
+                missing_cols = [col for col in required_cols if col not in df.columns]
+                if missing_cols:
+                    logger.error(f"Alpha Vantage 返回的數據缺少欄位：{missing_cols}，股票：{ticker}")
+                    break
+                
+                df['Ticker'] = ticker
+                df['Adj Close'] = df['Close']
+                df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+                
+                # 過濾日期範圍
+                df = df[df['Date'] >= cutoff_date]
+                
+                for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                    if df[col].isna().any():
+                        logger.warning(f"股票 {ticker} 的 {col} 欄位包含無效值，已轉換為 NaN")
+                
+                all_data.append(df[['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume', 'Ticker']])
+                logger.info(f"成功下載股票 {ticker} 的數據 (Alpha Vantage)")
+                time.sleep(1)  # Alpha Vantage API 速率限制
+                break
+            except Exception as e:
+                logger.warning(f"Alpha Vantage 下載股票 {ticker} 失敗，錯誤：{str(e)}，重試 {attempt + 1}/{retries}")
+                time.sleep(delay)
+        else:
+            logger.error(f"Alpha Vantage 下載股票 {ticker} 失敗，已達最大重試次數")
+    
+    if not all_data:
+        logger.error(f"Alpha Vantage 下載 {tickers} 失敗，無有效數據")
         return None
+    
+    combined_df = pd.concat(all_data)
+    # 轉換為與 yfinance 相同的 MultiIndex 格式
+    combined_df = combined_df.set_index(['Date', 'Ticker']).unstack('Ticker')
+    logger.info(f"成功下載 {len(tickers)} 檔股票數據 (Alpha Vantage)")
+    return combined_df
 
 def init_repo():
     """初始化 Git 倉庫"""
@@ -303,13 +325,13 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                             ))
                         except ValueError as e:
                             logger.error(f"數據轉換失敗：{str(e)}")
-                            raise
+                            continue
                         except sqlite3.Error as e:
                             logger.error(f"SQLite 插入失敗，股票：{ticker}，日期：{row['Date']}，錯誤：{str(e)}")
-                            raise
+                            continue
                 except Exception as e:
                     logger.error(f"處理股票 {ticker} 的數據時失敗：{str(e)}")
-                    raise
+                    continue
 
             conn.commit()
             st.write(f"批次 {i // batch_size + 1}/{total_batches} 完成")
