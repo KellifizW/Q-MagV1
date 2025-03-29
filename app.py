@@ -4,7 +4,7 @@ import os
 from screening import screen_stocks, get_nasdaq_100, get_sp500, get_nasdaq_all
 from visualize import plot_top_5_stocks, plot_breakout_stocks
 from database import update_database  # 假設 database.py 已更新
-from git_utils import GitRepoManager  # 從之前模組導入
+from git_utils import GitRepoManager  # 更新後的模組
 from file_utils import diagnose_db_file  # 從之前模組導入
 from datetime import datetime, timedelta
 import logging
@@ -78,7 +78,6 @@ if st.button("初始化並更新資料庫", key="init_and_update"):
     st.write("資料庫診斷資訊：")
     for line in diagnostics:
         st.write(line)
-    # 明確傳入 db_path
     update_success = update_database(
         tickers_file=TICKERS_CSV,
         db_path=DB_PATH,
@@ -94,7 +93,6 @@ if st.button("更新資料庫", key="update_db"):
         st.write("資料庫診斷資訊：")
         for line in diagnostics:
             st.write(line)
-        # 明確傳入 db_path
         update_success = update_database(
             tickers_file=TICKERS_CSV,
             db_path=DB_PATH,
