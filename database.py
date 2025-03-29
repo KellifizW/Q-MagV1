@@ -12,19 +12,16 @@ import logging
 from typing import Optional, List, Dict, Tuple, Any
 import warnings
 import urllib3
-from yfinance import utils
 
 # 配置日誌記錄
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# 優化 yfinance 設置
+# 禁用警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-utils.get_session().close()
-utils.set_session(requests.Session())
 
-# 調整連接池參數
-session = utils.get_session()
+# 自定義會話
+session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(
     pool_connections=20,
     pool_maxsize=20,
@@ -186,10 +183,16 @@ def download_with_retry(
     retries: int = 2,
     delay: int = 5
 ) -> Optional[pd.DataFrame]:
-    """帶重試機制的數據下載"""
     for attempt in range(retries):
         try:
-            data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
+            data = yf.download(
+                tickers,
+                start=start,
+                end=end,
+                group_by='ticker',
+                progress=False,
+                session=session  # 傳遞自定義會話
+            )
             if data.empty:
                 logger.warning(f"yfinance 數據為空: {tickers}")
                 return None
