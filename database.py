@@ -103,7 +103,7 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None, r
                 "Low": item["low"],
                 "Close": item["close"],
                 "Volume": item["volume"],
-                "Adj Close": item.get("adj_close", item["close"]),
+                "Adj_Close": item.get("adj_close", item["close"]),
                 "Ticker": item["symbol"]
             }])
             all_data.append(df)
@@ -114,9 +114,6 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None, r
             return None
 
         combined_df = pd.concat(all_data)
-        # 修改：使用 pivot 確保與 yfinance 的多層索引格式一致
-        combined_df = combined_df.pivot(index='Date', columns='Ticker', values=['Open', 'High', 'Low', 'Close', 'Volume', 'Adj Close']).reset_index()
-        combined_df.columns = ['_'.join(col).strip('_') if col[1] else col[0] for col in combined_df.columns]
         logger.info(f"成功從 Marketstack 下載 {tickers} 的數據")
         success_count[0] += 1
         return combined_df
@@ -294,18 +291,13 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, yf_batch_size=YF_
                 fail_text.text(f"失敗下載批次：{fail_count[0]} 次")
 
                 if data is not None:
-                    df = data.reset_index()
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = ['_'.join(col).strip('_') if col[1] else col[0] for col in df.columns]
-
                     for ticker in yf_batch:
                         try:
-                            ticker_df = df[[col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
+                            ticker_df = data[data['Ticker'] == ticker].copy()
                             if ticker_df.empty:
                                 logger.warning(f"股票 {ticker} 的數據為空，跳過")
                                 continue
-                            ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
-                            ticker_df['Ticker'] = ticker
+                            
                             ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
                             
                             required_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
@@ -324,7 +316,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, yf_batch_size=YF_
                                         safe_float(row['High'], 'High', ticker, row['Date']),
                                         safe_float(row['Low'], 'Low', ticker, row['Date']),
                                         safe_float(row['Close'], 'Close', ticker, row['Date']),
-                                        safe_float(row['Close'], 'Close', ticker, row['Date']),
+                                        safe_float(row.get('Adj_Close', row['Close']), 'Adj_Close', ticker, row['Date']),
                                         safe_int(row['Volume'], 'Volume', ticker, row['Date'])
                                     ))
                                 except ValueError as e:
