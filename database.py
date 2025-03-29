@@ -58,7 +58,7 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None, r
     # 嘗試 yfinance
     for attempt in range(retries):
         try:
-            # raise Exception("強制 yfinance 失敗")  # 測試時啟用
+            raise Exception("強制 yfinance 失敗")  # 測試時啟用
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
                 logger.warning(f"批次數據為空，股票：{tickers}")
@@ -114,7 +114,10 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None, r
             return None
 
         combined_df = pd.concat(all_data)
-        combined_df = combined_df.set_index(['Date', 'Ticker']).unstack('Ticker')
+        # 修改：使用 pivot 確保與 yfinance 的多層索引格式一致
+        combined_df = combined_df.pivot(index='Date', columns='Ticker', values=['Open', 'High', 'Low', 'Close', 'Volume', 'Adj Close']).reset_index()
+        combined_df.columns = ['_'.join(col).strip('_') if col[1] else col[0] for col in combined_df.columns]
+        logger.info(f"成功從 Marketstack 下載 {tickers} 的數據")
         success_count[0] += 1
         return combined_df
 
