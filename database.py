@@ -109,6 +109,10 @@ def init_database():
             if response.status_code == 200:
                 with open(DB_PATH, "wb") as f:
                     f.write(response.content)
+                # 驗證檔案是否為有效資料庫
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute("SELECT 1 FROM sqlite_master LIMIT 1")  # 測試是否可查詢
+                conn.close()
                 st.write("已從 GitHub 下載 stocks.db")
             else:
                 st.write("未找到遠端 stocks.db，將創建新資料庫")
@@ -119,6 +123,16 @@ def init_database():
                 conn.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
                 conn.commit()
                 conn.close()
+            st.session_state['db_initialized'] = True
+        except sqlite3.DatabaseError as e:
+            st.error(f"下載的 stocks.db 無效：{str(e)}，將創建新資料庫")
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute('''CREATE TABLE IF NOT EXISTS stocks (
+                Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
+                PRIMARY KEY (Date, Ticker))''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
+            conn.commit()
+            conn.close()
             st.session_state['db_initialized'] = True
         except Exception as e:
             st.error(f"初始化資料庫失敗：{str(e)}")
@@ -314,13 +328,3 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
     except Exception as e:
         st.error(f"提取數據失敗：{str(e)}")
         return None, tickers
-
-if os.path.exists(DB_PATH):
-    with open(DB_PATH, "rb") as file:
-        st.download_button(
-            label="檢查用-下載 stocks.db",
-            data=file,
-            file_name="stocks.db",
-            mime="application/octet-stream",
-            key="download_db"
-        )
