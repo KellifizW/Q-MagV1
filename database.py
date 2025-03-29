@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import streamlit as st
 import logging
 from pytz import timezone
+import requests
 
 # 設置日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
