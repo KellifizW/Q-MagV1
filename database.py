@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import streamlit as st
 import logging
 from pytz import timezone
+import requests
 
 # 設置日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,7 +20,7 @@ DB_PATH = "stocks.db"
 TICKERS_CSV = "Tickers.csv"
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
-BATCH_SIZE = 20
+BATCH_SIZE = 10
 
 def download_with_retry(tickers, start, end, retries=2, delay=60):
     """使用 yfinance 下載數據，失敗後等待指定秒數後重試"""
@@ -64,7 +65,6 @@ def init_repo():
         return None
 
 def push_to_github(repo, message="Update stocks.db"):
-    """推送變更到 GitHub"""
     try:
         os.chdir(REPO_DIR)
         if not os.path.exists(DB_PATH):
@@ -81,8 +81,20 @@ def push_to_github(repo, message="Update stocks.db"):
         token = st.secrets["TOKEN"]
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
-        subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
+        
+        # 先拉取遠端變更
+        pull_result = subprocess.run(['git', 'pull', remote_url, branch], capture_output=True, text=True)
+        if pull_result.returncode != 0:
+            st.error(f"拉取遠端變更失敗：{pull_result.stderr}")
+            return False
+
+        # 推送至 GitHub
+        push_result = subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
+        st.write(f"推送成功：{push_result.stdout}")
         return True
+    except subprocess.CalledProcessError as e:
+        st.error(f"推送至 GitHub 失敗：{str(e)}\n錯誤輸出：{e.stderr}")
+        return False
     except Exception as e:
         st.error(f"推送至 GitHub 失敗：{str(e)}")
         return False
@@ -97,6 +109,10 @@ def init_database():
             if response.status_code == 200:
                 with open(DB_PATH, "wb") as f:
                     f.write(response.content)
+                # 驗證檔案是否為有效資料庫
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute("SELECT 1 FROM sqlite_master LIMIT 1")  # 測試是否可查詢
+                conn.close()
                 st.write("已從 GitHub 下載 stocks.db")
             else:
                 st.write("未找到遠端 stocks.db，將創建新資料庫")
@@ -107,6 +123,16 @@ def init_database():
                 conn.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
                 conn.commit()
                 conn.close()
+            st.session_state['db_initialized'] = True
+        except sqlite3.DatabaseError as e:
+            st.error(f"下載的 stocks.db 無效：{str(e)}，將創建新資料庫")
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute('''CREATE TABLE IF NOT EXISTS stocks (
+                Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
+                PRIMARY KEY (Date, Ticker))''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
+            conn.commit()
+            conn.close()
             st.session_state['db_initialized'] = True
         except Exception as e:
             st.error(f"初始化資料庫失敗：{str(e)}")
@@ -147,7 +173,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         # 確保日期格式一致
         ticker_dates['last_date'] = pd.to_datetime(ticker_dates['last_date'], errors='coerce').dt.strftime('%Y-%m-%d')
         logger.info(f"日期樣本（前5）：{ticker_dates['last_date'].head().tolist()}")
-        existing_tickers = dict(do_not_track=True)
         existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date']).dt.date))
 
         # 檢查完整性：根據指定比例從末尾開始檢查
@@ -184,6 +209,10 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
         # 分批下載並更新
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
+        logger.info(f"發現 {len(tickers_to_update)} 檔股票需要更新，範圍從 {min(existing_tickers.values(), default=end_date)} 至 {end_date}")
+
+        # 初始化進度條
+        progress_bar = st.progress(0)
         for i in range(0, len(tickers_to_update), batch_size):
             batch_tickers = tickers_to_update[i:i + batch_size]
             batch_start_dates = [
