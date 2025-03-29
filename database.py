@@ -8,6 +8,11 @@ from datetime import datetime, timedelta
 import streamlit as st
 import requests
 from pytz import timezone
+import logging
+
+# 設定後台日誌
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # 常量定義
 REPO_DIR = "."
@@ -36,7 +41,7 @@ def safe_float(value, column_name, ticker, date):
             return None
         return float(value)
     except (ValueError, TypeError) as e:
-        log_to_page(f"無法將 {column_name} 轉換為浮點數，股票：{ticker}，日期：{date}，值：{repr(value)}，錯誤：{str(e)}", "ERROR")
+        logger.error(f"無法將 {column_name} 轉換為浮點數，股票：{ticker}，日期：{date}，值：{repr(value)}，錯誤：{str(e)}")
         raise ValueError(f"Invalid {column_name} value for {ticker} on {date}: {repr(value)}")
 
 def safe_int(value, column_name, ticker, date):
@@ -45,10 +50,10 @@ def safe_int(value, column_name, ticker, date):
             return 0
         return int(value)
     except (ValueError, TypeError) as e:
-        log_to_page(f"無法將 {column_name} 轉換為整數，股票：{ticker}，日期：{date}，值：{repr(value)}，錯誤：{str(e)}", "ERROR")
+        logger.error(f"無法將 {column_name} 轉換為整數，股票：{ticker}，日期：{date}，值：{repr(value)}，錯誤：{str(e)}")
         raise ValueError(f"Invalid {column_name} value for {ticker} on {date}: {repr(value)}")
 
-def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None, request_count=[0]):
+def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None, request_count=[0], success_count=[0], fail_count=[0]):
     """下載股票數據，優先 yfinance，失敗則用 Marketstack"""
     # 嘗試 yfinance
     for attempt in range(retries):
@@ -56,35 +61,37 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None, r
             # raise Exception("強制 yfinance 失敗")  # 測試時啟用
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
-                log_to_page(f"批次數據為空，股票：{tickers}", "WARNING")
+                logger.warning(f"批次數據為空，股票：{tickers}")
                 return None
-            log_to_page(f"成功下載 {len(tickers)} 檔股票數據 (yfinance)", "INFO")
+            success_count[0] += 1
             return data
         except Exception as e:
-            log_to_page(f"yfinance 下載失敗，股票：{tickers}，錯誤：{str(e)}，重試 {attempt + 1}/{retries}", "WARNING")
+            logger.warning(f"yfinance 下載失敗，股票：{tickers}，錯誤：{str(e)}，重試 {attempt + 1}/{retries}")
             time.sleep(delay)
 
     # 切換到 Marketstack
     if not api_key:
-        log_to_page(f"未提供 Marketstack API Key，下載 {tickers} 失敗", "ERROR")
+        logger.error(f"未提供 Marketstack API Key，下載 {tickers} 失敗")
+        fail_count[0] += 1
         return None
 
-    log_to_page(f"yfinance 重試失敗，切換到 Marketstack 嘗試下載 {tickers}", "INFO")
+    logger.info(f"yfinance 重試失敗，切換到 Marketstack 嘗試下載 {tickers}")
     if request_count[0] >= MONTHLY_REQUEST_LIMIT:
-        log_to_page(f"已達每月請求限制 {MONTHLY_REQUEST_LIMIT} 次，停止下載", "ERROR")
+        logger.error(f"已達每月請求限制 {MONTHLY_REQUEST_LIMIT} 次，停止下載")
+        fail_count[0] += 1
         return None
 
     try:
-        # Marketstack 支援多股票請求
         symbols = ','.join(tickers)
         url = f"http://api.marketstack.com/v1/eod?access_key={api_key}&symbols={symbols}&date_from={start.strftime('%Y-%m-%d')}&date_to={end.strftime('%Y-%m-%d')}"
-        log_to_page(f"請求 Marketstack，股票：{tickers}，URL：{url}", "DEBUG")
+        logger.debug(f"請求 Marketstack，股票：{tickers}，URL：{url}")
         response = requests.get(url).json()
-        log_to_page(f"Marketstack API 回應: {response}", "DEBUG")
+        logger.debug(f"Marketstack API 回應: {response}")
         request_count[0] += 1
 
         if "data" not in response:
-            log_to_page(f"Marketstack 無數據返回，股票：{tickers}，回應：{response}", "ERROR")
+            logger.error(f"Marketstack 無數據返回，股票：{tickers}，回應：{response}")
+            fail_count[0] += 1
             return None
 
         all_data = []
@@ -102,16 +109,18 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None, r
             all_data.append(df)
 
         if not all_data:
-            log_to_page(f"Marketstack 下載 {tickers} 失敗，無有效數據", "ERROR")
+            logger.error(f"Marketstack 下載 {tickers} 失敗，無有效數據")
+            fail_count[0] += 1
             return None
 
         combined_df = pd.concat(all_data)
         combined_df = combined_df.set_index(['Date', 'Ticker']).unstack('Ticker')
-        log_to_page(f"成功下載 {len(tickers)} 檔股票數據 (Marketstack)", "INFO")
+        success_count[0] += 1
         return combined_df
 
     except Exception as e:
-        log_to_page(f"Marketstack 下載失敗，股票：{tickers}，錯誤：{str(e)}", "ERROR")
+        logger.error(f"Marketstack 下載失敗，股票：{tickers}，錯誤：{str(e)}")
+        fail_count[0] += 1
         return None
 
 def init_repo():
@@ -249,8 +258,16 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, yf_batch_size=YF_
             return False
 
         total_batches = (len(tickers_to_update) + ms_batch_size - 1) // ms_batch_size
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        total_sub_batches = sum((len(tickers_to_update[i:i + ms_batch_size]) + yf_batch_size - 1) // yf_batch_size for i in range(0, len(tickers_to_update), ms_batch_size))
+        
+        st.write("下載進度")
+        success_bar = st.progress(0)
+        success_text = st.empty()
+        fail_bar = st.progress(0)
+        fail_text = st.empty()
+        
+        success_count = [0]
+        fail_count = [0]
         request_count = [0]
 
         for i in range(0, len(tickers_to_update), ms_batch_size):
@@ -261,61 +278,63 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, yf_batch_size=YF_
             ]
             start_date = min(batch_start_dates)
 
-            # 將大批次拆成 yfinance 小批次
             for j in range(0, len(batch_tickers), yf_batch_size):
                 yf_batch = batch_tickers[j:j + yf_batch_size]
-                data = download_with_retry(yf_batch, start=start_date, end=end_date, api_key=api_key, request_count=request_count)
+                data = download_with_retry(yf_batch, start=start_date, end=end_date, api_key=api_key, request_count=request_count, success_count=success_count, fail_count=fail_count)
                 if data is None:
-                    log_to_page(f"批次 {i // ms_batch_size + 1}/{total_batches} (子批次 {j // yf_batch_size + 1}) 下載失敗，跳過", "WARNING")
-                    continue
+                    logger.warning(f"批次 {i // ms_batch_size + 1}/{total_batches} (子批次 {j // yf_batch_size + 1}) 下載失敗，跳過")
+                
+                # 更新進度條
+                success_bar.progress(min(success_count[0] / total_sub_batches, 1.0))
+                success_text.text(f"成功下載批次：{success_count[0]} 次")
+                fail_bar.progress(min(fail_count[0] / total_sub_batches, 1.0))
+                fail_text.text(f"失敗下載批次：{fail_count[0]} 次")
 
-                df = data.reset_index()
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = ['_'.join(col).strip('_') if col[1] else col[0] for col in df.columns]
+                if data is not None:
+                    df = data.reset_index()
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = ['_'.join(col).strip('_') if col[1] else col[0] for col in df.columns]
 
-                for ticker in yf_batch:
-                    try:
-                        ticker_df = df[[col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
-                        if ticker_df.empty:
-                            log_to_page(f"股票 {ticker} 的數據為空，跳過", "WARNING")
-                            continue
-                        ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
-                        ticker_df['Ticker'] = ticker
-                        ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
-                        
-                        required_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
-                        missing_cols = [col for col in required_cols if col not in ticker_df.columns]
-                        if missing_cols:
-                            log_to_page(f"股票 {ticker} 缺少必要欄位：{missing_cols}", "ERROR")
-                            continue
-
-                        for _, row in ticker_df.iterrows():
-                            try:
-                                cursor.execute('''INSERT OR IGNORE INTO stocks 
-                                    (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
-                                    row['Date'], ticker,
-                                    safe_float(row['Open'], 'Open', ticker, row['Date']),
-                                    safe_float(row['High'], 'High', ticker, row['Date']),
-                                    safe_float(row['Low'], 'Low', ticker, row['Date']),
-                                    safe_float(row['Close'], 'Close', ticker, row['Date']),
-                                    safe_float(row['Close'], 'Close', ticker, row['Date']),
-                                    safe_int(row['Volume'], 'Volume', ticker, row['Date'])
-                                ))
-                            except ValueError as e:
-                                log_to_page(f"數據轉換失敗：{str(e)}", "ERROR")
+                    for ticker in yf_batch:
+                        try:
+                            ticker_df = df[[col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
+                            if ticker_df.empty:
+                                logger.warning(f"股票 {ticker} 的數據為空，跳過")
                                 continue
-                            except sqlite3.Error as e:
-                                log_to_page(f"SQLite 插入失敗，股票：{ticker}，日期：{row['Date']}，錯誤：{str(e)}", "ERROR")
+                            ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
+                            ticker_df['Ticker'] = ticker
+                            ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
+                            
+                            required_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
+                            missing_cols = [col for col in required_cols if col not in ticker_df.columns]
+                            if missing_cols:
+                                logger.error(f"股票 {ticker} 缺少必要欄位：{missing_cols}")
                                 continue
-                    except Exception as e:
-                        log_to_page(f"處理股票 {ticker} 的數據時失敗：{str(e)}", "ERROR")
-                        continue
+
+                            for _, row in ticker_df.iterrows():
+                                try:
+                                    cursor.execute('''INSERT OR IGNORE INTO stocks 
+                                        (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
+                                        row['Date'], ticker,
+                                        safe_float(row['Open'], 'Open', ticker, row['Date']),
+                                        safe_float(row['High'], 'High', ticker, row['Date']),
+                                        safe_float(row['Low'], 'Low', ticker, row['Date']),
+                                        safe_float(row['Close'], 'Close', ticker, row['Date']),
+                                        safe_float(row['Close'], 'Close', ticker, row['Date']),
+                                        safe_int(row['Volume'], 'Volume', ticker, row['Date'])
+                                    ))
+                                except ValueError as e:
+                                    logger.error(f"數據轉換失敗：{str(e)}")
+                                    continue
+                                except sqlite3.Error as e:
+                                    logger.error(f"SQLite 插入失敗，股票：{ticker}，日期：{row['Date']}，錯誤：{str(e)}")
+                                    continue
+                        except Exception as e:
+                            logger.error(f"處理股票 {ticker} 的數據時失敗：{str(e)}")
+                            continue
 
             conn.commit()
-            progress = (i + ms_batch_size) / len(tickers_to_update)
-            progress_bar.progress(min(progress, 1.0))
-            status_text.text(f"批次 {i // ms_batch_size + 1}/{total_batches} 完成，請求次數：{request_count[0]}")
 
         cursor.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
         conn.commit()
