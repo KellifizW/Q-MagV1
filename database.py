@@ -171,8 +171,6 @@ def download_with_retry(
     """Data download with retry"""
     for attempt in range(retries):
         try:
-            # Force yfinance failure (for testing)
-            raise Exception("Force yfinance failure")
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
                 logger.warning(f"yfinance data empty for: {tickers}")
