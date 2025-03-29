@@ -22,11 +22,28 @@ REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 20
 
+def safe_float(value, column_name, ticker, date):
+    """安全轉換為浮點數，記錄錯誤"""
+    try:
+        return float(value) if pd.notna(value) else None
+    except (ValueError, TypeError) as e:
+        logger.error(f"無法將 {column_name} 轉換為浮點數，股票：{ticker}，日期：{date}，值：{value}，錯誤：{str(e)}")
+        return None
+
+def safe_int(value, column_name, ticker, date):
+    """安全轉換為整數，記錄錯誤"""
+    try:
+        return int(value) if pd.notna(value) else 0
+    except (ValueError, TypeError) as e:
+        logger.error(f"無法將 {column_name} 轉換為整數，股票：{ticker}，日期：{date}，值：{value}，錯誤：{str(e)}")
+        return 0
+
 def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
+    """下載股票數據，優先 yfinance，失敗則切換 Alpha Vantage"""
     # 首先嘗試 yfinance
     for attempt in range(retries):
         try:
-            raise Exception("強制 yfinance 失敗")
+            raise Exception("強制 yfinance 失敗")  # 你測試時強制失敗，正式使用時可移除
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
                 logger.warning(f"批次數據為空，股票：{tickers}")
@@ -63,18 +80,29 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
                 '5. volume': 'Volume'
             })
             df['Ticker'] = ticker
-            # 因為 Alpha Vantage 沒有 Adj_Close，直接使用 Close 填充（或設為 None）
-            df['Adj Close'] = df['Close']
+            df['Adj Close'] = df['Close']  # Alpha Vantage 無 Adj Close，用 Close 替代
             df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+            
+            # 檢查數據有效性
+            required_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                logger.error(f"Alpha Vantage 返回的數據缺少欄位：{missing_cols}，股票：{ticker}")
+                continue
+            
+            # 檢查數值欄位是否有效
+            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                if not pd.to_numeric(df[col], errors='coerce').notna().all():
+                    logger.warning(f"股票 {ticker} 的 {col} 欄位包含無效值，將被轉換為 NaN 或 0")
+            
             all_data.append(df[['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume', 'Ticker']])
-            time.sleep(1)  # Alpha Vantage 免費版有限制，避免超速
+            time.sleep(1)  # 避免超過 Alpha Vantage 免費版速率限制
 
         if not all_data:
             logger.error(f"Alpha Vantage 下載 {tickers} 失敗，無有效數據")
             return None
 
         combined_df = pd.concat(all_data)
-        # 模擬 yfinance 的 MultiIndex 格式以兼容後續處理
         combined_df = combined_df.set_index(['Date', 'Ticker']).unstack('Ticker')
         logger.info(f"成功下載 {len(tickers)} 檔股票數據 (Alpha Vantage)")
         return combined_df
@@ -122,7 +150,7 @@ def push_to_github(repo, message="Update stocks.db"):
             return True
 
         subprocess.run(['git', 'commit', '-m', message], check=True, capture_output=True, text=True)
-        token = ["TOKEN"]
+        token = st.secrets["TOKEN"]
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
         subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
@@ -135,7 +163,7 @@ def init_database():
     """從 GitHub 下載初始資料庫或創建新資料庫"""
     if 'db_initialized' not in st.session_state:
         try:
-            token = ["TOKEN"]
+            token = st.secrets["TOKEN"]
             url = "https://raw.githubusercontent.com/KellifizW/Q-MagV1/main/stocks.db"
             response = requests.get(url, headers={"Authorization": f"token {token}"})
             if response.status_code == 200:
@@ -232,7 +260,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
         for i in range(0, len(tickers_to_update), batch_size):
             batch_tickers = tickers_to_update[i:i + batch_size]
-            # 動態計算 start_date，回溯 lookback_days
             batch_start_dates = [
                 existing_tickers.get(ticker, default_start_date) - timedelta(days=lookback_days)
                 for ticker in batch_tickers
@@ -240,6 +267,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             start_date = min(batch_start_dates)
             data = download_with_retry(batch_tickers, start=start_date, end=end_date, api_key=api_key)
             if data is None:
+                logger.warning(f"批次 {i // batch_size + 1}/{total_batches} 下載失敗，跳過")
                 continue
 
             df = data.reset_index()
@@ -252,17 +280,22 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 ticker_df['Ticker'] = ticker
                 ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
                 
-                for _, row in ticker_df.iterrows():
-                    cursor.execute('''INSERT OR IGNORE INTO stocks 
-                        (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
-                        row['Date'], ticker,
-                        float(row['Open']) if pd.notna(row['Open']) else None,
-                        float(row['High']) if pd.notna(row['High']) else None,
-                        float(row['Low']) if pd.notna(row['Low']) else None,
-                        float(row['Close']) if pd.notna(row['Close']) else None,
-                        float(row['Close']) if pd.notna(row['Close']) else None,
-                        int(row['Volume']) if pd.notna(row['Volume']) else 0))
+                try:
+                    for _, row in ticker_df.iterrows():
+                        cursor.execute('''INSERT OR IGNORE INTO stocks 
+                            (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
+                            row['Date'], ticker,
+                            safe_float(row['Open'], 'Open', ticker, row['Date']),
+                            safe_float(row['High'], 'High', ticker, row['Date']),
+                            safe_float(row['Low'], 'Low', ticker, row['Date']),
+                            safe_float(row['Close'], 'Close', ticker, row['Date']),
+                            safe_float(row['Close'], 'Close', ticker, row['Date']),
+                            safe_int(row['Volume'], 'Volume', ticker, row['Date'])
+                        ))
+                except Exception as e:
+                    logger.error(f"插入股票 {ticker} 的數據失敗：{str(e)}")
+                    raise  # 拋出異常以便查看詳細錯誤
 
             conn.commit()
             st.write(f"批次 {i // batch_size + 1}/{total_batches} 完成")
@@ -272,7 +305,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         conn.commit()
         conn.close()
 
-        # 推送至 GitHub 並顯示結果
+        # 推送至 GitHub
         push_success = push_to_github(repo, f"Updated stocks.db with new data")
         if push_success:
             st.success("資料庫更新完成並成功推送至 GitHub")
@@ -310,6 +343,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         return False
 
 def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
+    """從資料庫提取股票數據"""
     try:
         if not os.path.exists(db_path):
             st.error(f"資料庫檔案 {db_path} 不存在，請先初始化或更新資料庫")
@@ -324,7 +358,6 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
             st.error(f"無數據：{tickers}")
             return None, tickers
         
-        # 確保索引是 datetime
         if not pd.api.types.is_datetime64_any_dtype(data.index):
             data.index = pd.to_datetime(data.index)
         
