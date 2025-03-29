@@ -3,8 +3,20 @@ import pandas as pd
 import os
 from screening import screen_stocks, get_nasdaq_100, get_sp500, get_nasdaq_all
 from visualize import plot_top_5_stocks, plot_breakout_stocks
-from database import init_repo, init_database, update_database
+from database import update_database  # 假設 database.py 已更新
+from git_utils import GitRepoManager  # 從之前模組導入
+from file_utils import diagnose_db_file  # 從之前模組導入
 from datetime import datetime, timedelta
+import logging
+
+# 設置日誌
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# 常量定義
+DB_PATH = "stocks.db"
+TICKERS_CSV = "Tickers.csv"
+REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 
 st.title("Qullamaggie Breakout Screener")
 
@@ -22,23 +34,35 @@ st.markdown("""
 #### 篩選結果說明：
 - 篩選結果顯示最近一天的數據，包含股票的當前狀態（例如「已突破且可買入」、「盤整中」）。
 - 顯示所有符合條件的股票（最多 5 隻），按 22 日內漲幅排序，繪製 3 個月走勢圖（包含股價、成交量、10 日均線及 MACD）。
-
-#### 補充說明：
-- **原作者 Qullamaggie 使用的參數**（根據 Reddit 文章）：
-  - 前段上升天數：20 天
-  - 盤整天數：10 天
-  - 22 交易日內最小漲幅：25%
-  - 67 交易日內最小漲幅：50%
-  - 126 交易日內最小漲幅：150%
-  - 最大盤整範圍：10%
-  - 最小 ADR：5%
 """)
 
-# 初始化 Git 倉庫和資料庫（僅首次執行）
+# 初始化 Git 倉庫（僅首次執行）
 if 'repo_initialized' not in st.session_state:
-    repo = init_repo()
-    st.session_state['repo_initialized'] = repo is not None
-    st.session_state['repo'] = repo
+    try:
+        repo_manager = GitRepoManager(".", REPO_URL, st.secrets.get("TOKEN", ""))
+        st.session_state['repo_initialized'] = True
+        st.session_state['repo_manager'] = repo_manager
+    except Exception as e:
+        st.error(f"Git 倉庫初始化失敗：{str(e)}")
+        st.session_state['repo_initialized'] = False
+
+# 初始化資料庫（簡化為檢查檔案是否存在）
+def init_database():
+    if not os.path.exists(DB_PATH):
+        st.error("資料庫 stocks.db 不存在，請點擊「初始化並更新資料庫」")
+    diagnostics = diagnose_db_file(DB_PATH)
+    if any("錯誤" in diag for diag in diagnostics):
+        st.warning("資料庫存在問題，請檢查以下診斷資訊並考慮重建：")
+        for line in diagnostics:
+            st.write(line)
+        if st.button("重建資料庫"):
+            os.remove(DB_PATH)
+            with open(DB_PATH, "wb") as f:  # 創建空檔案，後續由 update_database 填入結構
+                pass
+            repo_manager = st.session_state.get('repo_manager')
+            if repo_manager:
+                repo_manager.track_lfs(DB_PATH)
+            st.success("資料庫已重建，請更新資料庫以填充數據")
 
 init_database()
 
@@ -47,35 +71,37 @@ check_percentage = st.slider("檢查和更新比例 (%)", 0, 100, 10, help="選�
 
 # 更新和初始化按鈕
 if st.button("初始化並更新資料庫", key="init_and_update"):
-    repo = init_repo()
-    if repo:
-        st.session_state['repo_initialized'] = True
-        st.session_state['repo'] = repo
-        update_database(repo=repo, check_percentage=check_percentage)
-    else:
-        st.error("Git 倉庫初始化失敗，無法更新資料庫")
+    repo_manager = GitRepoManager(".", REPO_URL, st.secrets.get("TOKEN", ""))
+    st.session_state['repo_manager'] = repo_manager
+    st.session_state['repo_initialized'] = True
+    diagnostics = diagnose_db_file(DB_PATH)
+    st.write("資料庫診斷資訊：")
+    for line in diagnostics:
+        st.write(line)
+    update_database(repo_manager=repo_manager, check_percentage=check_percentage)
 
 if st.button("更新資料庫", key="update_db"):
     if st.session_state.get('repo_initialized', False):
-        update_database(repo=st.session_state['repo'], check_percentage=check_percentage)
+        diagnostics = diagnose_db_file(DB_PATH)
+        st.write("資料庫診斷資訊：")
+        for line in diagnostics:
+            st.write(line)
+        update_database(repo_manager=st.session_state['repo_manager'], check_percentage=check_percentage)
     else:
-        st.error("Git 倉庫未初始化，無法更新資料庫")
+        st.error("Git 倉庫未初始化，請先點擊「初始化並更新資料庫」")
 
 # 用戶輸入參數（使用 st.form）
 with st.sidebar.form(key="screening_form"):
     st.header("篩選參數")
     index_option = st.selectbox("選擇股票池", ["NASDAQ 100", "S&P 500", "NASDAQ All"])
     prior_days = st.slider("前段上升天數", 10, 30, 20)
-    consol_days = st.slider(
-        "盤整天數", 5, 15, 10,
-        help="盤整天數是指股票在突破前低波動盤整的天數。計算方式：從最近一天向前回溯指定天數，檢查這段期間的價格波動範圍是否小於最大盤整範圍。"
-    )
-    min_rise_22 = st.slider("22 日內最小漲幅 (%)", 0, 50, 10, help="股票在過去 22 交易日內的最小漲幅要求")
-    min_rise_67 = st.slider("67 日內最小漲幅 (%)", 0, 100, 40, help="股票在過去 67 交易日內的最小漲幅要求")
-    min_rise_126 = st.slider("126 日內最小漲幅 (%)", 0, 300, 80, help="股票在過去 126 交易日內的最小漲幅要求")
-    max_range = st.slider("最大盤整範圍 (%)", 3, 15, 10, help="增加此值以放寬整理區間")
-    min_adr = st.slider("最小 ADR (%)", 0, 10, 2, help="設為 0 以納入更多股票")
-    max_stocks = st.slider("最大篩選股票數量(測試用)", 10, 1000, 50, help="限制股票數量以加快處理速度，僅適用於 NASDAQ All")
+    consol_days = st.slider("盤整天數", 5, 15, 10, help="盤整天數是指股票在突破前低波動盤整的天數")
+    min_rise_22 = st.slider("22 日內最小漲幅 (%)", 0, 50, 10)
+    min_rise_67 = st.slider("67 日內最小漲幅 (%)", 0, 100, 40)
+    min_rise_126 = st.slider("126 日內最小漲幅 (%)", 0, 300, 80)
+    max_range = st.slider("最大盤整範圍 (%)", 3, 15, 10)
+    min_adr = st.slider("最小 ADR (%)", 0, 10, 2)
+    max_stocks = st.slider("最大篩選股票數量(測試用)", 10, 1000, 50)
     submit_button = st.form_submit_button("運行篩選")
 
 # 重置按鈕
@@ -86,35 +112,29 @@ if st.sidebar.button("重置篩選", key="reset_screening"):
 
 # 處理股票池選擇和篩選
 if submit_button:
-    # 重置篩選結果
     if 'df' in st.session_state:
         del st.session_state['df']
 
-    # 讀取 Tickers.csv 作為基礎清單
     try:
-        tickers_df = pd.read_csv("Tickers.csv")
+        tickers_df = pd.read_csv(TICKERS_CSV)
         csv_tickers = tickers_df['Ticker'].tolist()
     except Exception as e:
-        st.error(f"無法讀取 Tickers.csv: {str(e)}")
-        csv_tickers = ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA']  # 備用清單
+        st.error(f"無法讀取 {TICKERS_CSV}: {str(e)}")
+        csv_tickers = ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA']
 
-    # 更新 tickers
     if index_option == "NASDAQ 100":
         tickers = get_nasdaq_100(csv_tickers)
     elif index_option == "S&P 500":
-        tickers = get_sp500()  # 注意這裡不需要過濾 csv_tickers，因為你的 screen_stocks 會處理
+        tickers = get_sp500()
     else:
         tickers = get_nasdaq_all(csv_tickers)[:max_stocks]
     st.session_state['tickers'] = tickers
 
-    # 檢查資料庫是否存在
-    if not os.path.exists("stocks.db"):
-        st.error("資料庫 stocks.db 不存在，請先點擊「初始化並更新資料庫」或「更新資料庫」")
+    if not os.path.exists(DB_PATH):
+        st.error("資料庫 stocks.db 不存在，請先初始化或更新資料庫")
     else:
-        # 篩選邏輯
         with st.spinner("篩選中..."):
             progress_bar = st.progress(0)
-            # 修正 screen_stocks 調用，加入 stock_pool 參數
             df = screen_stocks(
                 tickers=tickers,
                 stock_pool=index_option,
@@ -128,100 +148,62 @@ if submit_button:
                 progress_bar=progress_bar
             )
             progress_bar.progress(1.0)
-            if 'stock_data' in st.session_state:
-                st.write(f"批量數據已載入，涵蓋 {len(st.session_state['stock_data'].columns.get_level_values(1))} 檔股票")
             if df.empty:
-                st.warning("無符合條件的股票。請嘗試以下調整：")
-                st.write(f"- **降低 22 日內最小漲幅** (目前: {min_rise_22}%)：嘗試設為 0-10%")
-                st.write(f"- **降低 67 日內最小漲幅** (目前: {min_rise_67}%)：嘗試設為 20-40%")
-                st.write(f"- **降低 126 日內最小漲幅** (目前: {min_rise_126}%)：嘗試設為 30-60%")
-                st.write(f"- **增加最大盤整範圍** (目前: {max_range}%)：嘗試設為 10-15%")
-                st.write(f"- **降低最小 ADR** (目前: {min_adr}%)：嘗試設為 0-2%")
-                st.write("- **擴大股票池**：選擇 NASDAQ All 並增加最大篩選股票數量")
+                st.warning("無符合條件的股票，請調整以下參數：")
+                st.write(f"- 降低 22 日內最小漲幅（當前: {min_rise_22}%）")
+                st.write(f"- 降低 67 日內最小漲幅（當前: {min_rise_67}%）")
+                st.write(f"- 降低 126 日內最小漲幅（當前: {min_rise_126}%）")
+                st.write(f"- 增加最大盤整範圍（當前: {max_range}%）")
+                st.write(f"- 降低最小 ADR（當前: {min_adr}%）")
             else:
                 st.session_state['df'] = df
-                st.success(f"找到 {len(df)} 筆符合條件的記錄（{len(df['Ticker'].unique())} 隻非重複股票）")
+                st.success(f"找到 {len(df)} 筆符合條件的記錄（{len(df['Ticker'].unique())} 隻股票）")
 
 # 顯示篩選結果
 if 'df' in st.session_state:
     df = st.session_state['df']
     st.subheader("篩選結果")
-    # 確保 Date 欄位格式一致
     df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-    # 只顯示最近一天的數據
     latest_date = df['Date'].max()
     latest_df = df[df['Date'] == latest_date].copy()
-    # 添加狀態欄位
-    latest_df.loc[:, 'Status'] = latest_df.apply(
+    latest_df['Status'] = latest_df.apply(
         lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume']
         else "已突破但成交量不足" if row['Breakout']
         else "盤整中" if row['Consolidation_Range_%'] < max_range
         else "前段上升", axis=1
     )
-    # 檢查 latest_df 的欄位
-    st.write("篩選結果的欄位：", latest_df.columns.tolist())
-    
-    # 重命名欄位以更直觀
+
     display_df = latest_df.rename(columns={
-        'Ticker': '股票代碼',
-        'Date': '日期',
-        'Price': '價格',
-        'Prior_Rise_22_%': '22 日內漲幅 (%)',
-        'Prior_Rise_67_%': '67 日內漲幅 (%)',
-        'Prior_Rise_126_%': '126 日內漲幅 (%)',
-        'Consolidation_Range_%': '盤整範圍 (%)',
-        'ADR_%': '平均日波幅 (%)',
-        'Breakout': '是否突破',
-        'Breakout_Volume': '突破成交量'
+        'Ticker': '股票代碼', 'Date': '日期', 'Price': '價格',
+        'Prior_Rise_22_%': '22 日內漲幅 (%)', 'Prior_Rise_67_%': '67 日內漲幅 (%)',
+        'Prior_Rise_126_%': '126 日內漲幅 (%)', 'Consolidation_Range_%': '盤整範圍 (%)',
+        'ADR_%': '平均日波幅 (%)', 'Breakout': '是否突破', 'Breakout_Volume': '突破成交量'
     })
-    
-    # 定義要顯示的欄位
+
     desired_columns = ['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '126 日內漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']
-    # 檢查哪些欄位存在
     available_columns = [col for col in desired_columns if col in display_df.columns]
-    missing_columns = [col for col in desired_columns if col not in display_df.columns]
-    
-    if missing_columns:
-        st.warning(f"以下欄位在篩選結果中缺失：{missing_columns}")
-        st.write("可能原因：")
-        st.write("- 篩選條件過嚴（例如 22 日內最小漲幅或 67 日內最小漲幅或 126 日內最小漲幅過高），導致無股票符合條件。")
-        st.write("- 數據下載失敗，部分股票數據缺失。")
-        st.write("建議：")
-        st.write("- 降低 22 日內最小漲幅或 67 日內最小漲幅或 126 日內最小漲幅。")
-        st.write("- 檢查網絡連線，確保數據下載正常。")
-    
     if available_columns:
         st.dataframe(display_df[available_columns])
     else:
-        st.error("無可顯示的欄位，請檢查篩選條件或數據來源。")
-    
-    # 繪製符合條件的股票走勢圖
+        st.error("無可顯示的欄位，請檢查篩選條件或數據來源")
+
     unique_tickers = latest_df['Ticker'].unique()
-    if len(unique_tickers) > 0:  # 只要有符合條件的股票就繪製圖表
+    if len(unique_tickers) > 0:
         st.subheader("符合條件的股票走勢（按 22 日內漲幅排序）")
-        # 按 22 日內漲幅排序
         if 'Prior_Rise_22_%' in latest_df.columns:
             top_df = latest_df.groupby('Ticker').agg({'Prior_Rise_22_%': 'max'}).reset_index()
             top_df = top_df.sort_values(by='Prior_Rise_22_%', ascending=False)
-            # 如果股票數量大於 5，則只取前 5 隻；否則取所有股票
-            num_to_display = min(len(unique_tickers), 5)
-            top_tickers = top_df['Ticker'].head(num_to_display).tolist()
+            top_tickers = top_df['Ticker'].head(min(len(unique_tickers), 5)).tolist()
             plot_top_5_stocks(top_tickers)
         else:
-            st.warning("無法繪製圖表：缺少 'Prior_Rise_22_%' 欄位，無法排序股票。")
-    
-    # 繪製突破股票圖表
+            st.warning("無法繪製圖表：缺少 'Prior_Rise_22_%' 欄位")
+
     breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume']]
     if not breakout_df.empty:
         st.subheader("當前突破股票（可買入）")
-        breakout_tickers = breakout_df['Ticker'].unique()
-        plot_breakout_stocks(breakout_tickers, consol_days)
+        plot_breakout_stocks(breakout_df['Ticker'].unique(), consol_days)
     else:
-        st.info("當前無突破股票（無可買入股票）。可能原因：")
-        if latest_df['Breakout'].sum() == 0:
-            st.write("- 無股票價格突破盤整區間高點。嘗試增加最大盤整範圍或降低 22 日/67 /126日內最小漲幅。")
-        elif latest_df['Breakout_Volume'].sum() == 0:
-            st.write("- 突破股票的成交量不足（需 > 過去 10 天均量的 1.5 倍）。嘗試調整成交量條件。")
+        st.info("當前無突破股票")
 
 # 顯示篩選範圍
 tickers = st.session_state.get('tickers', [])
