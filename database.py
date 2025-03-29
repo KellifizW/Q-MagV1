@@ -197,16 +197,21 @@ def download_with_retry(
             if isinstance(data.columns, pd.MultiIndex):
                 data.columns = [col[1] if col[0] == '' else '_'.join(col) for col in data.columns]
             
+            # 一次性處理所有預期欄位
             expected_columns = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
-            for col in expected_columns:
-                if col not in data.columns:
-                    if col == 'Adj Close':
-                        data['Adj Close'] = data['Close']
-                    else:
-                        data[col] = 0.0
+            missing_cols = {col: 0.0 for col in expected_columns if col not in data.columns}
+            if 'Adj Close' not in data.columns:
+                missing_cols['Adj Close'] = data['Close']
             
-            data.reset_index(inplace=True)
+            # 使用 pd.concat 一次性添加缺失欄位
+            if missing_cols:
+                missing_df = pd.DataFrame(missing_cols, index=data.index)
+                data = pd.concat([data, missing_df], axis=1)
+            
+            # 一次性重設索引並添加 Ticker 欄位
+            data = data.reset_index()
             data['Ticker'] = tickers[0] if len(tickers) == 1 else 'Multiple'
+            
             # 標準化日期格式
             data['Date'] = pd.to_datetime(data['Date']).dt.strftime('%Y-%m-%d')
             data.rename(columns={'Adj Close': 'Adj_Close', 'Date': 'Date'}, inplace=True)
