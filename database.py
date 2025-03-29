@@ -147,7 +147,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         # 確保日期格式一致
         ticker_dates['last_date'] = pd.to_datetime(ticker_dates['last_date'], errors='coerce').dt.strftime('%Y-%m-%d')
         logger.info(f"日期樣本（前5）：{ticker_dates['last_date'].head().tolist()}")
-        existing_tickers = dict do_not_track=True
         existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date']).dt.date))
 
         # 檢查完整性：根據指定比例從末尾開始檢查
