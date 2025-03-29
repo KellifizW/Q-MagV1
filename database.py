@@ -17,7 +17,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # 優化 yfinance 設置
-yf.pdr_override()
 yf.set_tz_cache_location("/tmp/py-yfinance")  # 設置自定義緩存位置
 
 # 常數配置
