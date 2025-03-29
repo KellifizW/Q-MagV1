@@ -7,7 +7,6 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import streamlit as st
 import logging
-import requests
 from pytz import timezone
 
 # 設置日誌
@@ -22,8 +21,8 @@ REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 20
 
-def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
-    # 首先嘗試 yfinance
+def download_with_retry(tickers, start, end, retries=2, delay=60):
+    """使用 yfinance 下載數據，失敗後等待指定秒數後重試"""
     for attempt in range(retries):
         try:
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
@@ -34,50 +33,10 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
             return data
         except Exception as e:
             logger.warning(f"yfinance 下載失敗，股票：{tickers}，錯誤：{str(e)}，重試 {attempt + 1}/{retries}")
-            time.sleep(delay)
-
-    # 如果 yfinance 失敗，切換到 Alpha Vantage
-    if not api_key:
-        logger.error(f"未提供 Alpha Vantage API Key，下載 {tickers} 失敗")
-        return None
-
-    logger.info(f"yfinance 重試失敗，切換到 Alpha Vantage 嘗試下載 {tickers}")
-    try:
-        all_data = []
-        for ticker in tickers:
-            url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&apikey={api_key}&outputsize=full"
-            response = requests.get(url).json()
-            if "Time Series (Daily)" not in response:
-                logger.warning(f"Alpha Vantage 無數據返回，股票：{ticker}")
-                continue
-            
-            time_series = response["Time Series (Daily)"]
-            df = pd.DataFrame.from_dict(time_series, orient='index').reset_index()
-            df = df.rename(columns={
-                'index': 'Date',
-                '1. open': 'Open',
-                '2. high': 'High',
-                '3. low': 'Low',
-                '4. close': 'Close',
-                '5. volume': 'Volume'
-            })
-            df['Ticker'] = ticker
-            df['Adj Close'] = df['Close']
-            df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
-            all_data.append(df[['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume', 'Ticker']])
-            time.sleep(1)
-
-        if not all_data:
-            logger.error(f"Alpha Vantage 下載 {tickers} 失敗，無有效數據")
-            return None
-
-        combined_df = pd.concat(all_data)
-        combined_df = combined_df.set_index(['Date', 'Ticker']).unstack('Ticker')
-        logger.info(f"成功下載 {len(tickers)} 檔股票數據 (Alpha Vantage)")
-        return combined_df
-    except Exception as e:
-        logger.error(f"Alpha Vantage 下載 {tickers} 失敗，錯誤：{str(e)}")
-        return None
+            if attempt < retries - 1:  # 最後一次失敗不等待
+                time.sleep(delay)
+    logger.error(f"yfinance 下載 {tickers} 最終失敗，經過 {retries} 次嘗試")
+    return None
 
 def init_repo():
     """初始化 Git 倉庫"""
@@ -188,6 +147,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         # 確保日期格式一致
         ticker_dates['last_date'] = pd.to_datetime(ticker_dates['last_date'], errors='coerce').dt.strftime('%Y-%m-%d')
         logger.info(f"日期樣本（前5）：{ticker_dates['last_date'].head().tolist()}")
+        existing_tickers = dict do_not_track=True
         existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date']).dt.date))
 
         # 檢查完整性：根據指定比例從末尾開始檢查
@@ -223,19 +183,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         logger.info(f"需更新的股票數量：{len(tickers_to_update)}")
 
         # 分批下載並更新
-        try:
-            api_key = st.secrets["ALPHA_VANTAGE_API_KEY"]
-            logger.info(f"獲取的 Alpha Vantage API Key: {'已設置' if api_key else '未設置'}")
-            if not api_key:
-                st.error("Alpha Vantage API Key 是空的，請檢查 st.secrets 配置")
-                return False
-        except KeyError as e:
-            st.error(f"未找到 ALPHA_VANTAGE_API_KEY 於 st.secrets 中：{str(e)}")
-            return False
-        except Exception as e:
-            st.error(f"獲取 Alpha Vantage API Key 失敗：{str(e)}")
-            return False
-
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
         for i in range(0, len(tickers_to_update), batch_size):
             batch_tickers = tickers_to_update[i:i + batch_size]
@@ -246,7 +193,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             start_date = min(batch_start_dates)
             logger.info(f"批次 {i // batch_size + 1}/{total_batches}：股票 {batch_tickers}，開始日期 {start_date}")
             
-            data = download_with_retry(batch_tickers, start=start_date, end=end_date, api_key=api_key)
+            data = download_with_retry(batch_tickers, start=start_date, end=end_date)
             if data is None:
                 logger.warning(f"批次 {batch_tickers} 下載失敗，跳過")
                 continue
