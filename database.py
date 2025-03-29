@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 from pytz import timezone
 import logging
-from typing import List, Dict, Optional, Tuple
+from typing import Optional, List, Dict, Tuple, Any
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,9 +21,10 @@ DB_PATH = "stocks.db"
 TICKERS_CSV = "Tickers.csv"
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
-YF_BATCH_SIZE = 20
-MS_BATCH_SIZE = 100
-MONTHLY_REQUEST_LIMIT = 100
+YF_BATCH_SIZE = 20  # yfinance批次大小
+MS_BATCH_SIZE = 100  # Marketstack批次大小
+MONTHLY_REQUEST_LIMIT = 100  # Marketstack免费版每月限制
+MAX_HISTORY_DAYS = 90  # 最大历史数据天数
 
 # Streamlit日志显示
 def log_to_page(message: str, level: str = "INFO") -> None:
@@ -38,24 +39,24 @@ def log_to_page(message: str, level: str = "INFO") -> None:
         st.write(f"DEBUG: {message}")
 
 # 数据验证函数
-def safe_float(value, column_name: str, ticker: str, date: str):
+def safe_float(value: Any, column_name: str, ticker: str, date: str) -> Optional[float]:
     """安全转换为浮点数"""
     try:
         if pd.isna(value):
             return None
         return float(value)
     except (ValueError, TypeError) as e:
-        logger.error(f"转换失败 {column_name}, 股票: {ticker}, 日期: {date}, 值: {repr(value)}, 错误: {str(e)}")
+        logger.error(f"转换失败 {column_name}, 股票: {ticker}, 日期: {date}, 值: {repr(value)}")
         return None
 
-def safe_int(value, column_name: str, ticker: str, date: str):
+def safe_int(value: Any, column_name: str, ticker: str, date: str) -> int:
     """安全转换为整数"""
     try:
         if pd.isna(value):
             return 0
         return int(value)
     except (ValueError, TypeError) as e:
-        logger.error(f"转换失败 {column_name}, 股票: {ticker}, 日期: {date}, 值: {repr(value)}, 错误: {str(e)}")
+        logger.error(f"转换失败 {column_name}, 股票: {ticker}, 日期: {date}, 值: {repr(value)}")
         return 0
 
 # 数据缓存检查
@@ -65,7 +66,7 @@ def check_data_exists(db_conn: sqlite3.Connection, ticker: str, date: str) -> bo
         cursor = db_conn.cursor()
         cursor.execute(
             "SELECT 1 FROM stocks WHERE Ticker = ? AND Date = ?",
-            (ticker, date))
+            (ticker, date)
         return cursor.fetchone() is not None
     except sqlite3.Error as e:
         logger.error(f"检查数据存在失败: {str(e)}")
@@ -318,6 +319,8 @@ def update_database(
 
         # 连接数据库
         conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA synchronous = OFF")
+        conn.execute("PRAGMA journal_mode = MEMORY")
         
         # 确保表结构存在
         conn.execute('''CREATE TABLE IF NOT EXISTS stocks (
@@ -341,7 +344,7 @@ def update_database(
         num_to_check = max(1, int(len(tickers) * check_percentage))
         tickers_to_check = tickers[-num_to_check:]
         tickers_to_update = []
-        default_start_date = end_date - timedelta(days=210)
+        default_start_date = end_date - timedelta(days=MAX_HISTORY_DAYS)
 
         for ticker in tickers_to_check:
             last_date = existing_tickers.get(ticker)
@@ -372,6 +375,11 @@ def update_database(
         progress_bar = st.progress(0)
         status_text = st.empty()
         request_count = [0]
+        success_count = [0]
+        fail_count = [0]
+        
+        # 显示API使用情况
+        api_usage = st.sidebar.empty()
         
         # 分批处理
         total_batches = (len(tickers_to_update) + MS_BATCH_SIZE - 1) // MS_BATCH_SIZE
@@ -380,21 +388,31 @@ def update_database(
             batch_tickers = tickers_to_update[i:i + MS_BATCH_SIZE]
             batch_num = i // MS_BATCH_SIZE + 1
             
-            # 计算批次开始日期
-            batch_start_dates = [
-                existing_tickers.get(t, default_start_date) - timedelta(days=1)
-                for t in batch_tickers
-            ]
-            start_date = min(batch_start_dates)
-            
-            # 更新状态
+            # 更新进度
             progress = min((i + MS_BATCH_SIZE) / len(tickers_to_update), 1.0)
             progress_bar.progress(progress)
             status_text.text(f"处理批次 {batch_num}/{total_batches}: {', '.join(batch_tickers[:3])}...")
             
+            # 检查哪些股票需要更新
+            need_update = []
+            for ticker in batch_tickers:
+                if not check_data_exists(conn, ticker, end_date.strftime('%Y-%m-%d')):
+                    need_update.append(ticker)
+            
+            if not need_update:
+                logger.info(f"批次 {batch_num} 数据已是最新，跳过")
+                continue
+                
+            # 计算批次开始日期
+            batch_start_dates = [
+                existing_tickers.get(t, default_start_date) - timedelta(days=1)
+                for t in need_update
+            ]
+            start_date = min(batch_start_dates)
+            
             # 下载数据
             data = download_with_retry(
-                batch_tickers, 
+                need_update, 
                 start=start_date,
                 end=end_date,
                 api_key=api_key,
@@ -403,14 +421,18 @@ def update_database(
             )
             
             if data is not None and not data.empty:
-                # 批量插入数据
-                if not bulk_insert_data(data, conn):
-                    logger.error(f"批次 {batch_num} 插入失败")
+                if bulk_insert_data(data, conn):
+                    success_count[0] += 1
+                else:
+                    fail_count[0] += 1
             
-            # 显示API使用情况
-            st.sidebar.markdown("### Marketstack API 使用情况")
-            st.sidebar.progress(request_count[0] / MONTHLY_REQUEST_LIMIT)
-            st.sidebar.write(f"已用 {request_count[0]} / {MONTHLY_REQUEST_LIMIT} 次请求")
+            # 更新API使用情况显示
+            api_usage.markdown(f"""
+                **API使用情况**  
+                成功: {success_count[0]}  
+                失败: {fail_count[0]}  
+                剩余: {MONTHLY_REQUEST_LIMIT - request_count[0]}
+            """)
 
         # 更新元数据
         conn.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", 
@@ -441,6 +463,75 @@ def update_database(
         if 'conn' in locals():
             conn.close()
         return False
+
+def fetch_stock_data(
+    tickers: List[str], 
+    db_path: str = DB_PATH, 
+    trading_days: int = 140
+) -> Tuple[Optional[pd.DataFrame], List[str]]:
+    """从数据库获取股票数据
+    
+    Args:
+        tickers: 股票代码列表
+        db_path: 数据库路径 (默认: DB_PATH)
+        trading_days: 要获取的交易天数 (默认: 140)
+        
+    Returns:
+        Tuple[可选DataFrame, 原始股票代码列表]:
+            - DataFrame: 包含股票数据 (None表示失败)
+            - List[str]: 原始输入的股票代码列表
+    """
+    try:
+        # 验证数据库存在
+        if not os.path.exists(db_path):
+            st.error(f"数据库文件 {db_path} 不存在")
+            return None, tickers
+            
+        # 计算开始日期
+        start_date = (datetime.now(US_EASTERN).date() - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
+        
+        # 使用参数化查询防止SQL注入
+        placeholders = ','.join(['?'] * len(tickers))
+        query = f"""
+        SELECT * FROM stocks 
+        WHERE Ticker IN ({placeholders}) 
+        AND Date >= ?
+        ORDER BY Date
+        """
+        
+        # 执行查询
+        conn = sqlite3.connect(db_path)
+        data = pd.read_sql_query(
+            query, 
+            conn, 
+            params=tickers + [start_date],
+            parse_dates=['Date']
+        )
+        conn.close()
+        
+        # 检查空数据
+        if data.empty:
+            st.error(f"没有找到数据: {tickers}")
+            return None, tickers
+            
+        # 转换为pivot格式
+        pivoted_data = data.pivot(index='Date', columns='Ticker')
+        
+        # 记录统计信息
+        st.write(
+            f"获取数据 - 股票数: {len(tickers)}, "
+            f"数据条目: {len(data)}, "
+            f"日期范围: {data['Date'].min().date()} 至 {data['Date'].max().date()}"
+        )
+        
+        return pivoted_data, tickers
+        
+    except sqlite3.Error as e:
+        st.error(f"数据库查询失败: {str(e)}")
+        return None, tickers
+    except Exception as e:
+        st.error(f"获取数据失败: {str(e)}")
+        return None, tickers
 
 # 主程序
 if __name__ == "__main__":
