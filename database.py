@@ -66,7 +66,7 @@ def check_data_exists(db_conn: sqlite3.Connection, ticker: str, date: str) -> bo
         cursor = db_conn.cursor()
         cursor.execute(
             "SELECT 1 FROM stocks WHERE Ticker = ? AND Date = ?",
-            (ticker, date)
+            (ticker, date))
         return cursor.fetchone() is not None
     except sqlite3.Error as e:
         logger.error(f"检查数据存在失败: {str(e)}")
