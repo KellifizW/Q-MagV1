@@ -26,7 +26,6 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
     # 首先嘗試 yfinance
     for attempt in range(retries):
         try:
-            # raise Exception("強制 yfinance 失敗")
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
                 logger.warning(f"批次數據為空，股票：{tickers}")
@@ -63,18 +62,16 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
                 '5. volume': 'Volume'
             })
             df['Ticker'] = ticker
-            # 因為 Alpha Vantage 沒有 Adj_Close，直接使用 Close 填充（或設為 None）
             df['Adj Close'] = df['Close']
-            df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
             all_data.append(df[['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume', 'Ticker']])
-            time.sleep(1)  # Alpha Vantage 免費版有限制，避免超速
+            time.sleep(1)
 
         if not all_data:
             logger.error(f"Alpha Vantage 下載 {tickers} 失敗，無有效數據")
             return None
 
         combined_df = pd.concat(all_data)
-        # 模擬 yfinance 的 MultiIndex 格式以兼容後續處理
         combined_df = combined_df.set_index(['Date', 'Ticker']).unstack('Ticker')
         logger.info(f"成功下載 {len(tickers)} 檔股票數據 (Alpha Vantage)")
         return combined_df
@@ -122,7 +119,7 @@ def push_to_github(repo, message="Update stocks.db"):
             return True
 
         subprocess.run(['git', 'commit', '-m', message], check=True, capture_output=True, text=True)
-        token = ["TOKEN"]
+        token = st.secrets["TOKEN"]
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
         subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
@@ -135,7 +132,7 @@ def init_database():
     """從 GitHub 下載初始資料庫或創建新資料庫"""
     if 'db_initialized' not in st.session_state:
         try:
-            token = ["TOKEN"]
+            token = st.secrets["TOKEN"]
             url = "https://raw.githubusercontent.com/KellifizW/Q-MagV1/main/stocks.db"
             response = requests.get(url, headers={"Authorization": f"token {token}"})
             if response.status_code == 200:
@@ -182,9 +179,15 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         last_updated = cursor.fetchone()
         current_date = datetime.now(US_EASTERN).date()
         end_date = current_date - timedelta(days=1)
-        
+        logger.info(f"當前日期：{current_date}，結束日期：{end_date}")
+        logger.info(f"資料庫最後更新日期：{last_updated[0] if last_updated else '無記錄'}")
+
         # 獲取現有股票的最後日期
         ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
+        logger.info(f"從資料庫中讀取 {len(ticker_dates)} 檔股票的最後日期")
+        # 確保日期格式一致
+        ticker_dates['last_date'] = pd.to_datetime(ticker_dates['last_date'], errors='coerce').dt.strftime('%Y-%m-%d')
+        logger.info(f"日期樣本（前5）：{ticker_dates['last_date'].head().tolist()}")
         existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date']).dt.date))
 
         # 檢查完整性：根據指定比例從末尾開始檢查
@@ -195,13 +198,15 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
         for ticker in tickers_to_check:
             last_date = existing_tickers.get(ticker)
-            if not last_date:  # 缺少股票數據
+            if not last_date:
+                logger.info(f"股票 {ticker} 無數據，將加入更新清單")
                 tickers_to_update.append(ticker)
-            elif (end_date - last_date).days > 0:  # 數據不是最新的
+            elif (end_date - last_date).days > 0:
+                logger.info(f"股票 {ticker} 最後日期 {last_date}，需更新至 {end_date}")
                 tickers_to_update.append(ticker)
 
         if not tickers_to_update:
-            if last_updated and pd.to_datetime(last_updated[0]).date() >= end_date and len(existing_tickers) >= len(tickers):
+            if last_updated and pd.to_datetime(last_updated[0], errors='coerce').date() >= end_date and len(existing_tickers) >= len(tickers):
                 st.write("資料庫已是最新且完整，無需更新")
                 conn.close()
                 return True
@@ -215,10 +220,12 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 conn.close()
                 return True
 
+        logger.info(f"需更新的股票數量：{len(tickers_to_update)}")
+
         # 分批下載並更新
         try:
             api_key = st.secrets["ALPHA_VANTAGE_API_KEY"]
-            logger.info(f"獲取的 Alpha Vantage API Key: {api_key}")
+            logger.info(f"獲取的 Alpha Vantage API Key: {'已設置' if api_key else '未設置'}")
             if not api_key:
                 st.error("Alpha Vantage API Key 是空的，請檢查 st.secrets 配置")
                 return False
@@ -232,14 +239,16 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
         for i in range(0, len(tickers_to_update), batch_size):
             batch_tickers = tickers_to_update[i:i + batch_size]
-            # 動態計算 start_date，回溯 lookback_days
             batch_start_dates = [
                 existing_tickers.get(ticker, default_start_date) - timedelta(days=lookback_days)
                 for ticker in batch_tickers
             ]
             start_date = min(batch_start_dates)
+            logger.info(f"批次 {i // batch_size + 1}/{total_batches}：股票 {batch_tickers}，開始日期 {start_date}")
+            
             data = download_with_retry(batch_tickers, start=start_date, end=end_date, api_key=api_key)
             if data is None:
+                logger.warning(f"批次 {batch_tickers} 下載失敗，跳過")
                 continue
 
             df = data.reset_index()
@@ -250,8 +259,16 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 ticker_df = df[[col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
                 ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
                 ticker_df['Ticker'] = ticker
-                ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
-                
+                # 確保日期格式為純日期
+                ticker_df['Date'] = pd.to_datetime(ticker_df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+                logger.info(f"股票 {ticker} 下載數據日期樣本（前5）：{ticker_df['Date'].head().tolist()}")
+
+                # 驗證日期格式
+                if not ticker_df['Date'].str.match(r'^\d{4}-\d{2}-\d{2}$').all():
+                    logger.error(f"股票 {ticker} 的日期格式不正確：{ticker_df['Date'].head().tolist()}")
+                    st.error(f"股票 {ticker} 的日期格式不正確，請檢查數據來源")
+                    continue
+
                 for _, row in ticker_df.iterrows():
                     cursor.execute('''INSERT OR IGNORE INTO stocks 
                         (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
@@ -266,11 +283,13 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
             conn.commit()
             st.write(f"批次 {i // batch_size + 1}/{total_batches} 完成")
+            logger.info(f"批次 {i // batch_size + 1}/{total_batches} 已寫入資料庫")
 
         # 更新 metadata
         cursor.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
         conn.commit()
         conn.close()
+        logger.info(f"資料庫 metadata 更新，最後更新日期：{end_date}")
 
         # 推送至 GitHub 並顯示結果
         push_success = push_to_github(repo, f"Updated stocks.db with new data")
@@ -305,6 +324,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
     except Exception as e:
         st.error(f"資料庫更新失敗：{str(e)}")
+        logger.error(f"資料庫更新失敗，詳細錯誤：{str(e)}")
         if 'conn' in locals():
             conn.close()
         return False
@@ -324,7 +344,6 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
             st.error(f"無數據：{tickers}")
             return None, tickers
         
-        # 確保索引是 datetime
         if not pd.api.types.is_datetime64_any_dtype(data.index):
             data.index = pd.to_datetime(data.index)
         
