@@ -9,41 +9,23 @@ import streamlit as st
 import requests
 from pytz import timezone
 import logging
-from typing import Optional, List, Dict, Tuple, Any
-import warnings
-import urllib3
 
-# 配置日誌記錄
+# 設定後台日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# 禁用警告
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# 自定義會話
-session = requests.Session()
-adapter = requests.adapters.HTTPAdapter(
-    pool_connections=20,
-    pool_maxsize=20,
-    max_retries=3
-)
-session.mount('http://', adapter)
-session.mount('https://', adapter)
-
-# 常數配置
+# 常量定義
 REPO_DIR = "."
 DB_PATH = "stocks.db"
 TICKERS_CSV = "Tickers.csv"
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
-YF_BATCH_SIZE = 10
-MS_BATCH_SIZE = 100
-MONTHLY_REQUEST_LIMIT = 100
-MAX_HISTORY_DAYS = 90
+YF_BATCH_SIZE = 20  # yfinance 批次大小
+MS_BATCH_SIZE = 100  # Marketstack 批次大小
+MONTHLY_REQUEST_LIMIT = 100  # Marketstack 免費版每月限制
 
-# Streamlit 日誌顯示
-def log_to_page(message: str, level: str = "INFO") -> None:
-    """在 Streamlit 頁面上顯示日誌消息"""
+# 使用 Streamlit 顯示日誌
+def log_to_page(message, level="INFO"):
     if level == "INFO":
         st.info(message)
     elif level == "WARNING":
@@ -51,511 +33,385 @@ def log_to_page(message: str, level: str = "INFO") -> None:
     elif level == "ERROR":
         st.error(message)
     elif level == "DEBUG":
-        st.write(f"除錯: {message}")
+        st.write(f"DEBUG: {message}")
 
-# 數據驗證函數
-def safe_float(value: Any, column_name: str, ticker: str, date: str) -> Optional[float]:
-    """安全轉換為浮點數"""
+def safe_float(value, column_name, ticker, date):
     try:
         if pd.isna(value):
             return None
         return float(value)
     except (ValueError, TypeError) as e:
-        logger.error(f"轉換失敗 {column_name}, 股票代碼: {ticker}, 日期: {date}, 值: {repr(value)}")
-        return None
+        logger.error(f"無法將 {column_name} 轉換為浮點數，股票：{ticker}，日期：{date}，值：{repr(value)}，錯誤：{str(e)}")
+        raise ValueError(f"Invalid {column_name} value for {ticker} on {date}: {repr(value)}")
 
-def safe_int(value: Any, column_name: str, ticker: str, date: str) -> int:
-    """安全轉換為整數"""
+def safe_int(value, column_name, ticker, date):
     try:
         if pd.isna(value):
             return 0
         return int(value)
     except (ValueError, TypeError) as e:
-        logger.error(f"轉換失敗 {column_name}, 股票代碼: {ticker}, 日期: {date}, 值: {repr(value)}")
-        return 0
+        logger.error(f"無法將 {column_name} 轉換為整數，股票：{ticker}，日期：{date}，值：{repr(value)}，錯誤：{str(e)}")
+        raise ValueError(f"Invalid {column_name} value for {ticker} on {date}: {repr(value)}")
 
-# 數據緩存檢查
-def check_data_exists(db_conn: sqlite3.Connection, ticker: str, date: str) -> bool:
-    """檢查數據是否已存在"""
-    cursor = None
-    try:
-        cursor = db_conn.cursor()
-        cursor.execute(
-            "SELECT 1 FROM stocks WHERE Ticker = ? AND Date = ?",
-            (ticker, date))
-        return cursor.fetchone() is not None
-    except sqlite3.Error as e:
-        logger.error(f"檢查數據存在失敗: {str(e)}")
-        return False
-    finally:
-        if cursor:
-            cursor.close()
+def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None, request_count=[0], success_count=[0], fail_count=[0]):
+    """下載股票數據，優先 yfinance，失敗則用 Marketstack"""
+    # 嘗試 yfinance
+    for attempt in range(retries):
+        try:
+            raise Exception("強制 yfinance 失敗")  # 測試時啟用
+            data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
+            if data.empty:
+                logger.warning(f"批次數據為空，股票：{tickers}")
+                return None
+            success_count[0] += 1
+            return data
+        except Exception as e:
+            logger.warning(f"yfinance 下載失敗，股票：{tickers}，錯誤：{str(e)}，重試 {attempt + 1}/{retries}")
+            time.sleep(delay)
 
-# Marketstack 數據處理
-def process_marketstack_data(api_data: List[Dict]) -> Optional[pd.DataFrame]:
-    """處理 Marketstack API 返回的原始數據"""
-    if not api_data:
+    # 切換到 Marketstack
+    if not api_key:
+        logger.error(f"未提供 Marketstack API Key，下載 {tickers} 失敗")
+        fail_count[0] += 1
         return None
 
-    records = []
-    for item in api_data:
-        required_fields = {'date', 'symbol', 'open', 'high', 'low', 'close', 'volume'}
-        if not all(field in item for field in required_fields):
-            continue
+    logger.info(f"yfinance 重試失敗，切換到 Marketstack 嘗試下載 {tickers}")
+    if request_count[0] >= MONTHLY_REQUEST_LIMIT:
+        logger.error(f"已達每月請求限制 {MONTHLY_REQUEST_LIMIT} 次，停止下載")
+        fail_count[0] += 1
+        return None
 
-        try:
-            records.append({
-                "Date": pd.to_datetime(item["date"]).strftime('%Y-%m-%d'),  # 統一日期格式
-                "Ticker": item["symbol"],
+    try:
+        symbols = ','.join(tickers)
+        url = f"http://api.marketstack.com/v1/eod?access_key={api_key}&symbols={symbols}&date_from={start.strftime('%Y-%m-%d')}&date_to={end.strftime('%Y-%m-%d')}"
+        logger.debug(f"請求 Marketstack，股票：{tickers}，URL：{url}")
+        response = requests.get(url).json()
+        logger.debug(f"Marketstack API 回應: {response}")
+        request_count[0] += 1
+
+        if "data" not in response:
+            logger.error(f"Marketstack 無數據返回，股票：{tickers}，回應：{response}")
+            fail_count[0] += 1
+            return None
+
+        all_data = []
+        for item in response["data"]:
+            df = pd.DataFrame([{
+                "Date": item["date"].split("T")[0],
                 "Open": item["open"],
                 "High": item["high"],
                 "Low": item["low"],
                 "Close": item["close"],
                 "Volume": item["volume"],
-                "Adj_Close": item.get("adj_close", item["close"])
-            })
-        except Exception as e:
-            logger.error(f"處理數據項失敗: {str(e)}")
-            continue
+                "Adj Close": item.get("adj_close", item["close"]),
+                "Ticker": item["symbol"]
+            }])
+            all_data.append(df)
 
-    return pd.DataFrame(records) if records else None
-
-# 優化的 Marketstack 下載函數
-def download_with_marketstack(
-    tickers: List[str],
-    start: datetime,
-    end: datetime,
-    api_key: str,
-    request_count: List[int],
-    db_conn: sqlite3.Connection
-) -> Optional[pd.DataFrame]:
-    """優化的 Marketstack 數據下載"""
-    if request_count[0] >= MONTHLY_REQUEST_LIMIT:
-        logger.error(f"已達到每月請求限制 {MONTHLY_REQUEST_LIMIT}")
-        return None
-
-    try:
-        needed_tickers = [
-            t for t in tickers 
-            if not check_data_exists(db_conn, t, end.strftime('%Y-%m-%d'))
-        ]
-        
-        if not needed_tickers:
-            logger.info(f"所有 {len(tickers)} 支股票數據已存在，跳過下載")
-            return pd.DataFrame()
-
-        symbols = ','.join(needed_tickers)
-        url = f"http://api.marketstack.com/v1/eod?access_key={api_key}&symbols={symbols}&date_from={start.strftime('%Y-%m-%d')}&date_to={end.strftime('%Y-%m-%d')}"
-        
-        logger.info(f"請求 Marketstack API: {url.replace(api_key, '***')}")
-        response = requests.get(url, timeout=10)
-        
-        if response.status_code == 200:
-            request_count[0] += 1
-            logger.info(f"剩餘 API 請求次數: {MONTHLY_REQUEST_LIMIT - request_count[0]}")
-        else:
-            logger.error(f"請求失敗，狀態碼: {response.status_code}")
+        if not all_data:
+            logger.error(f"Marketstack 下載 {tickers} 失敗，無有效數據")
+            fail_count[0] += 1
             return None
 
-        data = response.json()
-        
-        if "error" in data:
-            logger.error(f"API 返回錯誤: {data['error']}")
-            return None
-            
-        return process_marketstack_data(data.get("data", []))
-        
+        combined_df = pd.concat(all_data)
+        # 修改：使用 pivot 確保與 yfinance 的多層索引格式一致
+        combined_df = combined_df.pivot(index='Date', columns='Ticker', values=['Open', 'High', 'Low', 'Close', 'Volume', 'Adj Close']).reset_index()
+        combined_df.columns = ['_'.join(col).strip('_') if col[1] else col[0] for col in combined_df.columns]
+        logger.info(f"成功從 Marketstack 下載 {tickers} 的數據")
+        success_count[0] += 1
+        return combined_df
+
     except Exception as e:
-        logger.error(f"Marketstack 請求異常: {str(e)}")
+        logger.error(f"Marketstack 下載失敗，股票：{tickers}，錯誤：{str(e)}")
+        fail_count[0] += 1
         return None
 
-# 帶重試的數據下載函數
-def download_with_retry(
-    tickers: List[str],
-    start: datetime,
-    end: datetime,
-    api_key: str,
-    request_count: List[int],
-    db_conn: sqlite3.Connection,
-    retries: int = 2,
-    delay: int = 5
-) -> Optional[pd.DataFrame]:
-    for attempt in range(retries):
-        try:
-            data = yf.download(
-                tickers,
-                start=start,
-                end=end,
-                group_by='ticker',
-                progress=False,
-                session=session
-            )
-            if data.empty:
-                logger.warning(f"yfinance 數據為空: {tickers}")
-                return None
-            
-            if isinstance(data.columns, pd.MultiIndex):
-                data.columns = [col[1] if col[0] == '' else '_'.join(col) for col in data.columns]
-            
-            # 一次性處理所有預期欄位
-            expected_columns = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
-            missing_cols = {col: 0.0 for col in expected_columns if col not in data.columns}
-            if 'Adj Close' not in data.columns:
-                missing_cols['Adj Close'] = data['Close']
-            
-            # 使用 pd.concat 一次性添加缺失欄位
-            if missing_cols:
-                missing_df = pd.DataFrame(missing_cols, index=data.index)
-                data = pd.concat([data, missing_df], axis=1)
-            
-            # 一次性重設索引並添加 Ticker 欄位
-            data = data.reset_index()
-            data['Ticker'] = tickers[0] if len(tickers) == 1 else 'Multiple'
-            
-            # 標準化日期格式
-            data['Date'] = pd.to_datetime(data['Date']).dt.strftime('%Y-%m-%d')
-            data.rename(columns={'Adj Close': 'Adj_Close', 'Date': 'Date'}, inplace=True)
-            
-            return data
-        except Exception as e:
-            logger.warning(f"yfinance 下載失敗 {tickers}, 嘗試 {attempt+1}/{retries}: {str(e)}")
-            time.sleep(delay)
-
-    return download_with_marketstack(tickers, start, end, api_key, request_count, db_conn)
-
-# 批量插入數據到數據庫
-def bulk_insert_data(df: pd.DataFrame, db_conn: sqlite3.Connection) -> bool:
-    """使用 INSERT OR IGNORE 高效批量插入數據"""
-    if df.empty:
-        return True
-
-    try:
-        # 標準化日期格式
-        df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-        
-        # 標準化列順序和名稱
-        expected_columns = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Adj_Close', 'Volume']
-        df = df[expected_columns].copy()
-        
-        df.to_sql('temp_stocks', db_conn, if_exists='replace', index=False)
-        
-        db_conn.execute("""
-            INSERT OR IGNORE INTO stocks
-            SELECT * FROM temp_stocks
-        """)
-        
-        db_conn.execute("DROP TABLE temp_stocks")
-        db_conn.commit()
-        
-        logger.info(f"成功插入 {db_conn.total_changes} 條記錄")
-        return True
-        
-    except sqlite3.IntegrityError as e:
-        logger.error(f"唯一性約束錯誤: {str(e)}")
-        db_conn.rollback()
-        return False
-    except Exception as e:
-        logger.error(f"批量插入失敗: {str(e)}")
-        db_conn.rollback()
-        return False
-
-# 初始化 Git 存儲庫
-def init_repo() -> bool:
-    """初始化 Git 存儲庫"""
+def init_repo():
     try:
         os.chdir(REPO_DIR)
         if not os.path.exists('.git'):
             subprocess.run(['git', 'init'], check=True, capture_output=True, text=True)
-            log_to_page("已初始化 Git 存儲庫", "INFO")
+            log_to_page("初始化 Git 倉庫", "INFO")
 
         if "TOKEN" not in st.secrets:
-            st.error("未找到 GitHub TOKEN，請在 Secrets 中配置")
-            return False
-
+            st.error("未找到 'TOKEN'，請在 Streamlit Cloud 的 Secrets 中配置")
+            return None
         token = st.secrets["TOKEN"]
+
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
-        
         subprocess.run(['git', 'remote', 'remove', 'origin'], capture_output=True, text=True)
         subprocess.run(['git', 'remote', 'add', 'origin', remote_url], check=True, capture_output=True, text=True)
+        
         subprocess.run(['git', 'config', 'user.name', 'KellifizW'], check=True)
         subprocess.run(['git', 'config', 'user.email', 'your.email@example.com'], check=True)
-        
-        log_to_page("Git 存儲庫初始化完成", "INFO")
+        log_to_page("Git 倉庫初始化完成", "INFO")
         return True
     except Exception as e:
-        st.error(f"初始化 Git 存儲庫失敗: {str(e)}")
-        return False
+        st.error(f"初始化 Git 倉庫失敗：{str(e)}")
+        return None
 
-# 推送到 GitHub
-def push_to_github(message: str = "更新 stocks.db") -> bool:
-    """推送更改到 GitHub"""
+def push_to_github(repo, message="Update stocks.db"):
     try:
         os.chdir(REPO_DIR)
         if not os.path.exists(DB_PATH):
-            st.error(f"{DB_PATH} 不存在")
+            st.error(f"stocks.db 不存在於路徑：{DB_PATH}")
             return False
 
+        subprocess.run(['git', 'add', DB_PATH], check=True, capture_output=True, text=True)
         status = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True)
-        if not status.stdout.strip():
-            st.write("沒有更改需要推送")
+        if not status.stdout:
+            st.write("無變更需要推送")
             return True
 
-        subprocess.run(['git', 'add', DB_PATH], check=True, capture_output=True, text=True)
         subprocess.run(['git', 'commit', '-m', message], check=True, capture_output=True, text=True)
-        
         token = st.secrets["TOKEN"]
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
-        
         subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
         return True
     except Exception as e:
-        st.error(f"推送失敗: {str(e)}")
+        st.error(f"推送至 GitHub 失敗：{str(e)}")
         return False
 
-# 初始化數據庫
-def init_database() -> bool:
-    """初始化數據庫"""
+def init_database():
     if 'db_initialized' not in st.session_state:
         try:
-            if "TOKEN" not in st.secrets:
-                st.error("未找到 GitHub TOKEN")
-                return False
-
+            token = st.secrets["TOKEN"]
             url = "https://raw.githubusercontent.com/KellifizW/Q-MagV1/main/stocks.db"
-            headers = {"Authorization": f"token {st.secrets['TOKEN']}"}
-            response = requests.get(url, headers=headers)
-            
+            response = requests.get(url, headers={"Authorization": f"token {token}"})
             if response.status_code == 200:
                 with open(DB_PATH, "wb") as f:
                     f.write(response.content)
-                st.write("成功從 GitHub 下載 stocks.db")
+                st.write("已從 GitHub 下載 stocks.db")
             else:
+                st.write("未找到遠端 stocks.db，將創建新資料庫")
                 conn = sqlite3.connect(DB_PATH)
                 conn.execute('''CREATE TABLE IF NOT EXISTS stocks (
-                    Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, 
-                    Close REAL, Adj_Close REAL, Volume INTEGER,
+                    Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
                     PRIMARY KEY (Date, Ticker))''')
                 conn.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
                 conn.commit()
                 conn.close()
-                st.write("創建了新的 stocks.db 數據庫")
-            
             st.session_state['db_initialized'] = True
-            return True
         except Exception as e:
-            st.error(f"初始化數據庫失敗: {str(e)}")
+            st.error(f"初始化資料庫失敗：{str(e)}")
             st.session_state['db_initialized'] = False
-            return False
-    return True
 
-# 主更新函數
-def update_database(
-    tickers_file: str = TICKERS_CSV,
-    db_path: str = DB_PATH,
-    repo: Optional[bool] = None,
-    check_percentage: float = 0.1
-) -> bool:
-    """主數據庫更新函數"""
+def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, yf_batch_size=YF_BATCH_SIZE, ms_batch_size=MS_BATCH_SIZE, repo=None, check_percentage=0.1, lookback_days=30):
     if repo is None:
-        st.error("未提供 Git 存儲庫對象")
+        st.error("未提供 Git 倉庫物件")
         return False
 
     try:
         tickers_df = pd.read_csv(tickers_file)
         tickers = tickers_df['Ticker'].tolist()
-        log_to_page(f"從 {tickers_file} 讀取了 {len(tickers)} 支股票", "INFO")
+        log_to_page(f"從 {tickers_file} 讀取 {len(tickers)} 檔股票", "INFO")
 
         conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA synchronous = OFF")
-        conn.execute("PRAGMA journal_mode = MEMORY")
-        
-        conn.execute('''CREATE TABLE IF NOT EXISTS stocks (
-            Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, 
-            Close REAL, Adj_Close REAL, Volume INTEGER,
+        cursor = conn.cursor()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS stocks (
+            Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
             PRIMARY KEY (Date, Ticker))''')
-        conn.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
         conn.commit()
 
+        cursor.execute("SELECT last_updated FROM metadata")
+        last_updated = cursor.fetchone()
         current_date = datetime.now(US_EASTERN).date()
         end_date = current_date - timedelta(days=1)
         
-        # 獲取每個股票代碼的最後更新日期，確保正確解析日期
-        ticker_dates = pd.read_sql_query(
-            "SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", 
-            conn,
-            parse_dates={'last_date': '%Y-%m-%d'}
-        )
+        ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
         existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date']).dt.date))
 
         num_to_check = max(1, int(len(tickers) * check_percentage))
         tickers_to_check = tickers[-num_to_check:]
         tickers_to_update = []
-        default_start_date = end_date - timedelta(days=MAX_HISTORY_DAYS)
+        default_start_date = end_date - timedelta(days=210)
 
         for ticker in tickers_to_check:
             last_date = existing_tickers.get(ticker)
-            if not last_date or (end_date - last_date).days > 0:
+            if not last_date:
+                tickers_to_update.append(ticker)
+            elif (end_date - last_date).days > 0:
                 tickers_to_update.append(ticker)
 
         if not tickers_to_update:
-            if len(existing_tickers) >= len(tickers):
-                st.write("數據庫已是最新且完整，無需更新")
+            if last_updated and pd.to_datetime(last_updated[0]).date() >= end_date and len(existing_tickers) >= len(tickers):
+                st.write("資料庫已是最新且完整，無需更新")
                 conn.close()
                 return True
-            else:
-                st.write(f"數據庫缺少部分股票數據(現有 {len(existing_tickers)} / 總計 {len(tickers)})，正在更新缺失部分")
+            elif len(existing_tickers) < len(tickers):
+                st.write(f"資料庫缺少部分股票數據（現有 {len(existing_tickers)} / 共 {len(tickers)}），將更新缺失部分")
                 tickers_to_update = [t for t in tickers if t not in existing_tickers]
+            else:
+                st.write("資料庫數據已是最新，無需更新")
+                cursor.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
+                conn.commit()
+                conn.close()
+                return True
 
         try:
             api_key = st.secrets["MARKETSTACK_API_KEY"]
+            log_to_page(f"獲取的 Marketstack API Key: {api_key}", "INFO")
             if not api_key:
-                st.error("Marketstack API 密鑰為空")
+                st.error("Marketstack API Key 是空的，請檢查 st.secrets 配置")
                 return False
-        except KeyError:
-            st.error("未找到 MARKETSTACK_API_KEY")
+        except KeyError as e:
+            st.error(f"未找到 MARKETSTACK_API_KEY 於 st.secrets 中：{str(e)}")
             return False
 
+        total_batches = (len(tickers_to_update) + ms_batch_size - 1) // ms_batch_size
+        total_sub_batches = sum((len(tickers_to_update[i:i + ms_batch_size]) + yf_batch_size - 1) // yf_batch_size for i in range(0, len(tickers_to_update), ms_batch_size))
+        
         st.write("下載進度")
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        request_count = [0]
+        success_bar = st.progress(0)
+        success_text = st.empty()
+        fail_bar = st.progress(0)
+        fail_text = st.empty()
+        
         success_count = [0]
         fail_count = [0]
-        
-        api_usage = st.sidebar.empty()
-        
-        total_batches = (len(tickers_to_update) + MS_BATCH_SIZE - 1) // MS_BATCH_SIZE
-        
-        for i in range(0, len(tickers_to_update), MS_BATCH_SIZE):
-            batch_tickers = tickers_to_update[i:i + MS_BATCH_SIZE]
-            batch_num = i // MS_BATCH_SIZE + 1
-            
-            progress = min((i + MS_BATCH_SIZE) / len(tickers_to_update), 1.0)
-            progress_bar.progress(progress)
-            status_text.text(f"處理批次 {batch_num}/{total_batches}: {', '.join(batch_tickers[:3])}...")
-            
-            need_update = []
-            for ticker in batch_tickers:
-                if not check_data_exists(conn, ticker, end_date.strftime('%Y-%m-%d')):
-                    need_update.append(ticker)
-            
-            if not need_update:
-                logger.info(f"批次 {batch_num} 數據已是最新，跳過")
-                continue
-                
+        request_count = [0]
+
+        for i in range(0, len(tickers_to_update), ms_batch_size):
+            batch_tickers = tickers_to_update[i:i + ms_batch_size]
             batch_start_dates = [
-                existing_tickers.get(t, default_start_date) - timedelta(days=1)
-                for t in need_update
+                existing_tickers.get(ticker, default_start_date) - timedelta(days=lookback_days)
+                for ticker in batch_tickers
             ]
             start_date = min(batch_start_dates)
-            
-            data = download_with_retry(
-                need_update, 
-                start=start_date,
-                end=end_date,
-                api_key=api_key,
-                request_count=request_count,
-                db_conn=conn
-            )
-            
-            if data is not None and not data.empty:
-                if bulk_insert_data(data, conn):
-                    success_count[0] += 1
-                else:
-                    fail_count[0] += 1
-            
-            api_usage.markdown(f"""
-                **API 使用情況**  
-                成功: {success_count[0]}  
-                失敗: {fail_count[0]}  
-                剩餘次數: {MONTHLY_REQUEST_LIMIT - request_count[0]}
-            """)
 
-        conn.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", 
-                    (end_date.strftime('%Y-%m-%d'),))
+            for j in range(0, len(batch_tickers), yf_batch_size):
+                yf_batch = batch_tickers[j:j + yf_batch_size]
+                data = download_with_retry(yf_batch, start=start_date, end=end_date, api_key=api_key, request_count=request_count, success_count=success_count, fail_count=fail_count)
+                if data is None:
+                    logger.warning(f"批次 {i // ms_batch_size + 1}/{total_batches} (子批次 {j // yf_batch_size + 1}) 下載失敗，跳過")
+                
+                # 更新進度條
+                success_bar.progress(min(success_count[0] / total_sub_batches, 1.0))
+                success_text.text(f"成功下載批次：{success_count[0]} 次")
+                fail_bar.progress(min(fail_count[0] / total_sub_batches, 1.0))
+                fail_text.text(f"失敗下載批次：{fail_count[0]} 次")
+
+                if data is not None:
+                    df = data.reset_index()
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = ['_'.join(col).strip('_') if col[1] else col[0] for col in df.columns]
+
+                    for ticker in yf_batch:
+                        try:
+                            ticker_df = df[[col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
+                            if ticker_df.empty:
+                                logger.warning(f"股票 {ticker} 的數據為空，跳過")
+                                continue
+                            ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
+                            ticker_df['Ticker'] = ticker
+                            ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
+                            
+                            required_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
+                            missing_cols = [col for col in required_cols if col not in ticker_df.columns]
+                            if missing_cols:
+                                logger.error(f"股票 {ticker} 缺少必要欄位：{missing_cols}")
+                                continue
+
+                            for _, row in ticker_df.iterrows():
+                                try:
+                                    cursor.execute('''INSERT OR IGNORE INTO stocks 
+                                        (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
+                                        row['Date'], ticker,
+                                        safe_float(row['Open'], 'Open', ticker, row['Date']),
+                                        safe_float(row['High'], 'High', ticker, row['Date']),
+                                        safe_float(row['Low'], 'Low', ticker, row['Date']),
+                                        safe_float(row['Close'], 'Close', ticker, row['Date']),
+                                        safe_float(row['Close'], 'Close', ticker, row['Date']),
+                                        safe_int(row['Volume'], 'Volume', ticker, row['Date'])
+                                    ))
+                                except ValueError as e:
+                                    logger.error(f"數據轉換失敗：{str(e)}")
+                                    continue
+                                except sqlite3.Error as e:
+                                    logger.error(f"SQLite 插入失敗，股票：{ticker}，日期：{row['Date']}，錯誤：{str(e)}")
+                                    continue
+                        except Exception as e:
+                            logger.error(f"處理股票 {ticker} 的數據時失敗：{str(e)}")
+                            continue
+
+            conn.commit()
+
+        cursor.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
         conn.commit()
         conn.close()
 
-        if push_to_github(f"更新了 {len(tickers_to_update)} 支股票的數據"):
-            st.success("數據庫更新完成並推送至 GitHub")
+        push_success = push_to_github(repo, f"Updated stocks.db with new data")
+        if push_success:
+            st.success("資料庫更新完成並成功推送至 GitHub")
         else:
-            st.warning("數據庫已更新但推送至 GitHub 失敗")
+            st.warning("資料庫更新完成，但推送至 GitHub 失敗")
         
-        if os.path.exists(DB_PATH):
-            with open(DB_PATH, "rb") as f:
-                st.download_button(
-                    label="下載 stocks.db",
-                    data=f,
-                    file_name="stocks.db",
-                    mime="application/octet-stream"
-                )
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("手動推送至 GitHub", key="manual_push"):
+                manual_push_success = push_to_github(repo, "Manual push after update")
+                if manual_push_success:
+                    st.success("手動推送至 GitHub 成功")
+                else:
+                    st.error("手動推送至 GitHub 失敗")
+        with col2:
+            if os.path.exists(DB_PATH):
+                with open(DB_PATH, "rb") as file:
+                    st.download_button(
+                        label="下載 stocks.db",
+                        data=file,
+                        file_name="stocks.db",
+                        mime="application/octet-stream",
+                        key="download_db"
+                    )
+            else:
+                st.error("stocks.db 不存在，無法下載")
         
         return True
 
     except Exception as e:
-        st.error(f"數據庫更新失敗: {str(e)}")
+        st.error(f"資料庫更新失敗：{str(e)}")
         if 'conn' in locals():
             conn.close()
         return False
 
-def fetch_stock_data(
-    tickers: List[str], 
-    db_path: str = DB_PATH, 
-    trading_days: int = 140
-) -> Tuple[Optional[pd.DataFrame], List[str]]:
+def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=140):  # 調整為 140 天
     try:
         if not os.path.exists(db_path):
-            st.error(f"數據庫文件 {db_path} 不存在")
+            st.error(f"資料庫檔案 {db_path} 不存在，請先初始化或更新資料庫")
             return None, tickers
-            
-        start_date = (datetime.now(US_EASTERN).date() - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
-        placeholders = ','.join(['?'] * len(tickers))
-        query = f"""
-        SELECT Date, Ticker, Open, High, Low, Close, Adj_Close, Volume 
-        FROM stocks 
-        WHERE Ticker IN ({placeholders}) 
-        AND Date >= ?
-        ORDER BY Date
-        """
-        
         conn = sqlite3.connect(db_path)
-        data = pd.read_sql_query(
-            query, 
-            conn, 
-            params=tickers + [start_date],
-            parse_dates={'Date': '%Y-%m-%d'}
-        )
+        start_date = (datetime.now(US_EASTERN).date() - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
+        query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?']*len(tickers))}) AND Date >= ?"
+        data = pd.read_sql_query(query, conn, params=tickers + [start_date], index_col='Date', parse_dates=['Date'])
         conn.close()
         
         if data.empty:
-            st.error(f"未找到數據: {tickers}")
+            st.error(f"無數據：{tickers}")
             return None, tickers
-            
-        pivoted_data = data.pivot(index='Date', columns='Ticker')
         
-        st.write(
-            f"已獲取數據 - 股票數量: {len(tickers)}, "
-            f"條目數: {len(data)}, "
-            f"日期範圍: {data['Date'].min().date()} 至 {data['Date'].max().date()}"
-        )
+        st.write(f"提取數據 - 股票數: {len(tickers)}, 數據長度: {len(data)}, 日期範圍: {data.index.min()} 至 {data.index.max()}")
         
+        if not pd.api.types.is_datetime64_any_dtype(data.index):
+            data.index = pd.to_datetime(data.index)
+        
+        pivoted_data = data.pivot(columns='Ticker')
         return pivoted_data, tickers
-        
-    except sqlite3.Error as e:
-        st.error(f"數據庫查詢失敗: {str(e)}")
-        return None, tickers
     except Exception as e:
-        st.error(f"獲取數據失敗: {str(e)}")
+        st.error(f"提取數據失敗：{str(e)}")
         return None, tickers
 
-# 主程序
+# 主程式
 if __name__ == "__main__":
-    st.title("股票數據庫更新工具")
+    st.title("股票資料庫更新工具")
+    repo = init_repo()
     
-    if init_repo() and init_database():
-        if st.button("初始化並更新數據庫"):
-            update_database()
-        
-        if st.button("僅更新數據庫"):
-            update_database()
+    if st.button("初始化並更新資料庫"):
+        init_database()
+        update_database(repo=repo)
+    
+    if st.button("更新資料庫"):
+        update_database(repo=repo)
