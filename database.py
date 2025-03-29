@@ -521,37 +521,21 @@ def fetch_stock_data(
     db_path: str = DB_PATH, 
     trading_days: int = 140
 ) -> Tuple[Optional[pd.DataFrame], List[str]]:
-    """從數據庫獲取股票數據
-    
-    參數:
-        tickers: 股票代碼列表
-        db_path: 數據庫路徑 (默認: DB_PATH)
-        trading_days: 要獲取的交易日天數 (默認: 140)
-        
-    返回:
-        元組[可選 DataFrame, 原始股票代碼列表]:
-            - DataFrame: 包含股票數據 (失敗時為 None)
-            - List[str]: 原始輸入股票代碼列表
-    """
     try:
-        # 驗證數據庫是否存在
         if not os.path.exists(db_path):
             st.error(f"數據庫文件 {db_path} 不存在")
             return None, tickers
             
-        # 計算開始日期
         start_date = (datetime.now(US_EASTERN).date() - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
-        
-        # 使用參數化查詢防止 SQL 注入
         placeholders = ','.join(['?'] * len(tickers))
         query = f"""
-        SELECT * FROM stocks 
+        SELECT DATE(Date) as Date, Ticker, Open, High, Low, Close, Adj_Close, Volume 
+        FROM stocks 
         WHERE Ticker IN ({placeholders}) 
         AND Date >= ?
         ORDER BY Date
         """
         
-        # 執行查詢
         conn = sqlite3.connect(db_path)
         data = pd.read_sql_query(
             query, 
@@ -561,15 +545,12 @@ def fetch_stock_data(
         )
         conn.close()
         
-        # 檢查空數據
         if data.empty:
             st.error(f"未找到數據: {tickers}")
             return None, tickers
             
-        # 轉換為透視格式
         pivoted_data = data.pivot(index='Date', columns='Ticker')
         
-        # 記錄統計信息
         st.write(
             f"已獲取數據 - 股票數量: {len(tickers)}, "
             f"條目數: {len(data)}, "
