@@ -27,16 +27,28 @@ BATCH_SIZE = 10
 def check_and_fetch_lfs_file(file_path, repo_url, token):
     """檢查並從 Git LFS 下載檔案"""
     try:
-        # 檢查檔案是否存在且不是 LFS 指標檔案
+        # 檢查檔案是否存在
         if os.path.exists(file_path):
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                # 檢查是否為 LFS 指標檔案
-                if content.startswith('version https://git-lfs.github.com'):
-                    logger.info(f"檢測到 {file_path} 是 LFS 指標檔案，開始下載實際內容")
-                    subprocess.run(['git', 'lfs', 'pull', '--include', file_path], 
-                                 check=True, capture_output=True, text=True)
-                    logger.info(f"已從 LFS 下載 {file_path}")
+            file_size = os.path.getsize(file_path)
+            # LFS 指標檔案通常很小（< 1KB），完整的資料庫檔案會大得多
+            if file_size < 1024:  # 假設小於 1KB 可能是 LFS 指標
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        # 檢查是否為 LFS 指標檔案
+                        if content.startswith('version https://git-lfs.github.com'):
+                            logger.info(f"檢測到 {file_path} 是 LFS 指標檔案，開始下載實際內容")
+                            subprocess.run(['git', 'lfs', 'pull', '--include', file_path], 
+                                         check=True, capture_output=True, text=True)
+                            logger.info(f"已從 LFS 下載 {file_path}")
+                            return True
+                except UnicodeDecodeError:
+                    # 如果無法用 UTF-8 解碼，假設是完整的二進位檔案
+                    logger.info(f"{file_path} 為二進位檔案，假設已完整，無需從 LFS 下載")
+                    return True
+            else:
+                # 檔案較大，假設是完整的資料庫檔案
+                logger.info(f"{file_path} 檔案大小 {file_size} 位元組，假設已完整，無需從 LFS 下載")
                 return True
         else:
             # 如果檔案不存在，嘗試從遠端獲取
@@ -50,10 +62,10 @@ def check_and_fetch_lfs_file(file_path, repo_url, token):
                 subprocess.run(['git', 'lfs', 'track', file_path], 
                              check=True, capture_output=True, text=True)
                 logger.info(f"已下載並配置 {file_path} 為 LFS 檔案")
+                return True
             else:
                 logger.warning(f"無法從 {raw_url} 下載檔案，狀態碼：{response.status_code}")
                 return False
-        return True
     except subprocess.CalledProcessError as e:
         logger.error(f"從 LFS 下載 {file_path} 失敗：{e.stderr}")
         return False
