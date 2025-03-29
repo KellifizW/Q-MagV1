@@ -47,7 +47,7 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
     # 首先嘗試 yfinance
     for attempt in range(retries):
         try:
-            # raise Exception("強制 yfinance 失敗")  # 測試用，已移除，正式運行時請確保此行被註解或移除
+            # raise Exception("強制 yfinance 失敗")  # 測試用，正式運行時請註解
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
                 logger.warning(f"批次數據為空，股票：{tickers}")
@@ -71,14 +71,17 @@ def download_with_retry(tickers, start, end, retries=2, delay=5, api_key=None):
         for attempt in range(retries):
             try:
                 url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&apikey={api_key}&outputsize=full"
+                logger.debug(f"請求 URL: {url}")
                 response = requests.get(url).json()
+                logger.debug(f"股票 {ticker} 的 API 回應: {response}")
                 
                 if "Time Series (Daily)" not in response:
-                    logger.warning(f"Alpha Vantage 無數據返回，股票：{ticker}")
                     if "Note" in response:
-                        logger.warning(f"API 訊息：{response['Note']}")
+                        logger.warning(f"Alpha Vantage API 限制，股票：{ticker}，訊息：{response['Note']}")
                     elif "Error Message" in response:
-                        logger.error(f"API 錯誤：{response['Error Message']}")
+                        logger.error(f"Alpha Vantage API 錯誤，股票：{ticker}，錯誤：{response['Error Message']}")
+                    else:
+                        logger.warning(f"Alpha Vantage 無數據返回，股票：{ticker}，回應：{response}")
                     break
                 
                 time_series = response["Time Series (Daily)"]
