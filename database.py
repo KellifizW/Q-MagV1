@@ -10,16 +10,6 @@ import logging
 from pytz import timezone
 import requests
 
-if os.path.exists(DB_PATH):
-    with open(DB_PATH, "rb") as file:
-        st.download_button(
-            label="檢查用-下載 stocks.db",
-            data=file,
-            file_name="stocks.db",
-            mime="application/octet-stream",
-            key="download_db"
-        )
-
 # 設置日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -31,6 +21,16 @@ TICKERS_CSV = "Tickers.csv"
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 10
+
+if os.path.exists(DB_PATH):
+    with open(DB_PATH, "rb") as file:
+        st.download_button(
+            label="檢查用-下載 stocks.db",
+            data=file,
+            file_name="stocks.db",
+            mime="application/octet-stream",
+            key="download_db"
+        )
 
 def download_with_retry(tickers, start, end, retries=2, delay=60):
     """使用 yfinance 下載數據，失敗後等待指定秒數後重試"""
