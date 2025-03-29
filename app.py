@@ -6,16 +6,6 @@ from visualize import plot_top_5_stocks, plot_breakout_stocks
 from database import init_repo, init_database, update_database
 from datetime import datetime, timedelta
 
-if os.path.exists(DB_PATH):
-    with open(DB_PATH, "rb") as file:
-        st.download_button(
-            label="檢查用-下載 stocks.db",
-            data=file,
-            file_name="stocks.db",
-            mime="application/octet-stream",
-            key="download_db"
-        )
-
 st.title("Qullamaggie Breakout Screener")
 
 st.markdown("""
