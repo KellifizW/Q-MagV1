@@ -22,16 +22,6 @@ REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 10
 
-if os.path.exists(DB_PATH):
-    with open(DB_PATH, "rb") as file:
-        st.download_button(
-            label="檢查用-下載 stocks.db",
-            data=file,
-            file_name="stocks.db",
-            mime="application/octet-stream",
-            key="download_db"
-        )
-
 def download_with_retry(tickers, start, end, retries=2, delay=60):
     """使用 yfinance 下載數據，失敗後等待指定秒數後重試"""
     for attempt in range(retries):
@@ -324,3 +314,13 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
     except Exception as e:
         st.error(f"提取數據失敗：{str(e)}")
         return None, tickers
+
+if os.path.exists(DB_PATH):
+    with open(DB_PATH, "rb") as file:
+        st.download_button(
+            label="檢查用-下載 stocks.db",
+            data=file,
+            file_name="stocks.db",
+            mime="application/octet-stream",
+            key="download_db"
+        )
