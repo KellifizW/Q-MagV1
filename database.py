@@ -64,7 +64,6 @@ def init_repo():
         return None
 
 def push_to_github(repo, message="Update stocks.db"):
-    """推送變更到 GitHub"""
     try:
         os.chdir(REPO_DIR)
         if not os.path.exists(DB_PATH):
@@ -81,8 +80,20 @@ def push_to_github(repo, message="Update stocks.db"):
         token = st.secrets["TOKEN"]
         remote_url = f"https://{token}@github.com/KellifizW/Q-MagV1.git"
         branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True).stdout.strip() or 'main'
-        subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
+        
+        # 先拉取遠端變更
+        pull_result = subprocess.run(['git', 'pull', remote_url, branch], capture_output=True, text=True)
+        if pull_result.returncode != 0:
+            st.error(f"拉取遠端變更失敗：{pull_result.stderr}")
+            return False
+
+        # 推送至 GitHub
+        push_result = subprocess.run(['git', 'push', remote_url, branch], check=True, capture_output=True, text=True)
+        st.write(f"推送成功：{push_result.stdout}")
         return True
+    except subprocess.CalledProcessError as e:
+        st.error(f"推送至 GitHub 失敗：{str(e)}\n錯誤輸出：{e.stderr}")
+        return False
     except Exception as e:
         st.error(f"推送至 GitHub 失敗：{str(e)}")
         return False
