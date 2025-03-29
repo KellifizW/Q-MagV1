@@ -46,7 +46,7 @@ if 'repo_initialized' not in st.session_state:
         st.error(f"Git 倉庫初始化失敗：{str(e)}")
         st.session_state['repo_initialized'] = False
 
-# 初始化資料庫（簡化為檢查檔案是否存在）
+# 初始化資料庫（檢查檔案是否存在並診斷）
 def init_database():
     if not os.path.exists(DB_PATH):
         st.error("資料庫 stocks.db 不存在，請點擊「初始化並更新資料庫」")
@@ -78,7 +78,15 @@ if st.button("初始化並更新資料庫", key="init_and_update"):
     st.write("資料庫診斷資訊：")
     for line in diagnostics:
         st.write(line)
-    update_database(repo_manager=repo_manager, check_percentage=check_percentage)
+    # 明確傳入 db_path
+    update_success = update_database(
+        tickers_file=TICKERS_CSV,
+        db_path=DB_PATH,
+        repo_manager=repo_manager,
+        check_percentage=check_percentage
+    )
+    if not update_success:
+        st.error("資料庫初始化與更新失敗，請檢查日誌或網絡連線")
 
 if st.button("更新資料庫", key="update_db"):
     if st.session_state.get('repo_initialized', False):
@@ -86,7 +94,15 @@ if st.button("更新資料庫", key="update_db"):
         st.write("資料庫診斷資訊：")
         for line in diagnostics:
             st.write(line)
-        update_database(repo_manager=st.session_state['repo_manager'], check_percentage=check_percentage)
+        # 明確傳入 db_path
+        update_success = update_database(
+            tickers_file=TICKERS_CSV,
+            db_path=DB_PATH,
+            repo_manager=st.session_state['repo_manager'],
+            check_percentage=check_percentage
+        )
+        if not update_success:
+            st.error("資料庫更新失敗，請檢查日誌或網絡連線")
     else:
         st.error("Git 倉庫未初始化，請先點擊「初始化並更新資料庫」")
 
