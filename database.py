@@ -20,7 +20,7 @@ DB_PATH = "stocks.db"
 TICKERS_CSV = "Tickers.csv"
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
-BATCH_SIZE = 20
+BATCH_SIZE = 10
 
 def download_with_retry(tickers, start, end, retries=2, delay=60):
     """使用 yfinance 下載數據，失敗後等待指定秒數後重試"""
@@ -195,6 +195,10 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
         # 分批下載並更新
         total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
+        logger.info(f"發現 {len(tickers_to_update)} 檔股票需要更新，範圍從 {min(existing_tickers.values(), default=end_date)} 至 {end_date}")
+
+        # 初始化進度條
+        progress_bar = st.progress(0)
         for i in range(0, len(tickers_to_update), batch_size):
             batch_tickers = tickers_to_update[i:i + batch_size]
             batch_start_dates = [
