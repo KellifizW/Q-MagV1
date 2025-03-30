@@ -62,9 +62,9 @@ def fetch_yfinance_data(ticker, trading_days=136):
         data = data.rename(columns={'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'})
         data['Ticker'] = ticker
         data = data.reset_index()
-        # Set Date as index and ensure it's datetime
+        # 設置日期索引並指定時區
         data.set_index('Date', inplace=True)
-        data.index = pd.to_datetime(data.index)
+        data.index = pd.to_datetime(data.index).tz_localize('US/Eastern')  # 明確指定時區為 US/Eastern
         data_pivoted = data.pivot(columns='Ticker')
         data_pivoted.columns = pd.MultiIndex.from_tuples([(col[0], col[1]) for col in data_pivoted.columns], names=[None, 'Ticker'])
         return data_pivoted
