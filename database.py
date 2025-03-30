@@ -183,16 +183,20 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             cursor.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
             conn.commit()
 
+            if not os.path.exists(DB_PATH):
+                st.error(f"資料庫檔案 {DB_PATH} 不存在，無法推送")
+                return False
+    
             push_success = repo_manager.push(DB_PATH, "Updated stocks.db with new data")
             if push_success:
                 st.success("資料庫更新完成並成功推送至 GitHub")
             else:
                 st.warning("資料庫更新完成，但推送至 GitHub 失敗，詳情請查看日誌")
-                if st.button("手動推送至 GitHub"):
-                    if repo_manager.push("Manual push after update"):
-                        st.success("手動推送成功")
-                    else:
-                        st.error("手動推送失敗，請檢查網絡或認證設置")
+            if st.button("手動推送至 GitHub"):
+                if repo_manager.push(DB_PATH, "Manual push after update"):
+            st.success("手動推送成功")
+                else:
+                    st.error("手動推送失敗，請檢查網絡或認證設置")
 
             if os.path.exists(DB_PATH):
                 with open(DB_PATH, "rb") as file:
