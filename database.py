@@ -126,7 +126,9 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             tickers_to_check = tickers[-num_to_check:]
             tickers_to_update = []
             default_start_date = end_date - timedelta(days=210)
-
+            
+            # 檢查更新需求
+            required_start_date = end_date - timedelta(days=210 + lookback_days)
             for ticker in tickers_to_check:
                 last_date = existing_tickers.get(ticker)
                 if not last_date or (end_date - last_date).days > 0:
@@ -147,38 +149,31 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
             for i in range(0, len(tickers_to_update), batch_size):
                 batch_tickers = tickers_to_update[i:i + batch_size]
-                batch_start_dates = [existing_tickers.get(ticker, default_start_date) - timedelta(days=lookback_days) for ticker in batch_tickers]
-                start_date = min(batch_start_dates)
-                
-                data = download_with_retry(batch_tickers, start=start_date, end=end_date)
-                if data is None:
-                    continue
-
-                df = data.reset_index()
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in df.columns]
-
                 for ticker in batch_tickers:
-                    ticker_df = df[[col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
-                    ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
-                    ticker_df['Ticker'] = ticker
-                    ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
-                    records = ticker_df.to_records(index=False)
-                    cursor.executemany('''INSERT OR IGNORE INTO stocks 
-                        (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
-                        [(r.Date, r.Ticker, float(r.Open) if pd.notna(r.Open) else None, 
-                          float(r.High) if pd.notna(r.High) else None, float(r.Low) if pd.notna(r.Low) else None, 
-                          float(r.Close) if pd.notna(r.Close) else None, float(r.Close) if pd.notna(r.Close) else None, 
-                          int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
+                    last_date = existing_tickers.get(ticker, default_start_date)
+                    start_date = last_date + timedelta(days=1) if last_date else default_start_date
+                    data = download_with_retry([ticker], start=start_date, end=end_date)
+                    if data is not None:
+                        # 處理數據並插入資料庫
+                        df = data.reset_index()
+                        ticker_df = df.copy()
+                        ticker_df['Ticker'] = ticker
+                        ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
+                        records = ticker_df.to_records(index=False)
+                        cursor.executemany('''INSERT OR IGNORE INTO stocks 
+                            (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
+                            [(r.Date, r.Ticker, float(r.Open) if pd.notna(r.Open) else None, 
+                              float(r.High) if pd.notna(r.High) else None, float(r.Low) if pd.notna(r.Low) else None, 
+                              float(r.Close) if pd.notna(r.Close) else None, float(r.Close) if pd.notna(r.Close) else None, 
+                              int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
 
                 conn.commit()
                 elapsed = time.time() - start_time
-                progress = (i + batch_size) / len(tickers_to_update)
-                remaining_batches = total_batches - (i // batch_size + 1)
+                progress = min((i + batch_size) / len(tickers_to_update), 1.0)
                 eta = (elapsed / (i + batch_size)) * (len(tickers_to_update) - (i + batch_size)) if i > 0 else 0
                 status_text.text(f"處理中：{batch_tickers}，進度：{int(progress*100)}%，預估剩餘時間：{int(eta)}秒")
-                progress_bar.progress(min(progress, 1.0))
+                progress_bar.progress(progress)
 
             cursor.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
             conn.commit()
