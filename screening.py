@@ -33,6 +33,8 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     matched_count = 0
     unmatched_count = 0
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
+    sufficient_data_tickers = []
+    insufficient_data_tickers = []
     
     for ticker in tickers:
         try:
@@ -55,8 +57,11 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             dates = stock.index
             
             if len(close) < required_days:
+                insufficient_data_tickers.append(ticker)
                 failed_stocks[ticker] = f"數據長度不足，長度 {len(close)}，需 {required_days}"
                 continue
+            else:
+                sufficient_data_tickers.append(ticker)
             
             close_shift_22 = close.shift(22)
             close_shift_67 = close.shift(67)
@@ -65,15 +70,19 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             rise_67 = (close / close_shift_67 - 1) * 100
             rise_126 = (close / close_shift_126 - 1) * 100
             
-            st.write(f"{ticker} - 22日數據點: {close_shift_22.notna().sum()}, 67日數據點: {close_shift_67.notna().sum()}, 126日數據點: {close_shift_126.notna().sum()}")
-            
             if rise_126.isna().all():
+                insufficient_data_tickers.append(ticker)
+                sufficient_data_tickers.remove(ticker)
                 failed_stocks[ticker] = f"無法計算 126 日漲幅，數據長度 {len(close)}，有效 126 日前數據點 {close_shift_126.notna().sum()}"
                 continue
             if rise_67.isna().all():
+                insufficient_data_tickers.append(ticker)
+                sufficient_data_tickers.remove(ticker)
                 failed_stocks[ticker] = f"無法計算 67 日漲幅，數據長度 {len(close)}，有效 67 日前數據點 {close_shift_67.notna().sum()}"
                 continue
             if rise_22.isna().all():
+                insufficient_data_tickers.append(ticker)
+                sufficient_data_tickers.remove(ticker)
                 failed_stocks[ticker] = f"無法計算 22 日漲幅，數據長度 {len(close)}，有效 22 日前數據點 {close_shift_22.notna().sum()}"
                 continue
             
@@ -132,6 +141,12 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         except Exception as e:
             failed_stocks[ticker] = f"分析失敗：{str(e)}"
             st.write(f"{ticker} 分析失敗：{str(e)}")
+    
+    # 顯示數據點分類結果
+    if sufficient_data_tickers:
+        st.write(f"有足夠數據點之股票：{', '.join(sufficient_data_tickers)}")
+    if insufficient_data_tickers:
+        st.write(f"不足數據點之股票：{', '.join(insufficient_data_tickers)}")
     
     if failed_stocks:
         st.warning(f"無法分析的股票：{failed_stocks}")
