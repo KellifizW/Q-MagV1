@@ -9,18 +9,15 @@ from file_utils import diagnose_db_file
 from datetime import datetime, timedelta
 import logging
 
-# 設置日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# 常量定義
 DB_PATH = "stocks.db"
 TICKERS_CSV = "Tickers.csv"
 REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 
 st.title("Qullamaggie Breakout Screener")
 
-# 增加主界面寬度 30%
 st.markdown("""
     <style>
     .main .block-container {
@@ -35,17 +32,12 @@ st.markdown("""
 
 #### 程式最終目的：
 1. **偵測 Qullamaggie Breakout 特徵**：檢查最近 30 日內是否有股票符合 Qullamaggie 描述的 Breakout 特徵：
-   - **顯著的前段漲幅**：股票在過去某段時間內展現強勁上漲（例如 22 日內漲幅 > 22 日內最小漲幅，67 日內漲幅 > 67 日內最小漲幅，126 日內漲幅 > 126 日內最小漲幅）。
-   - **低波動盤整期**：隨後進入低波動盤整階段，價格波動範圍縮小（盤整範圍 < 最大盤整範圍），成交量顯著下降。
-   - **突破關鍵阻力**：價格突破盤整區間高點，伴隨成交量顯著放大（> 過去 10 天均量的 1.5 倍）。
+   - **顯著的前段漲幅**：股票在過去某段時間內展現強勁上漲。
+   - **低波動盤整期**：隨後進入低波動盤整階段，價格波動範圍縮小，成交量下降。
+   - **突破關鍵阻力**：價格突破盤整區間高點，伴隨成交量顯著放大。
 2. **識別買入時機並標記信號**：如果股票已到達買入時機（突破當天），在圖表上標記買入信號。
-
-#### 篩選結果說明：
-- 篩選結果顯示最近一天的數據，包含股票的當前狀態（例如「已突破且可買入」、「盤整中」）。
-- 顯示所有符合條件的股票（最多 5 隻），按 22 日內漲幅排序，繪製 3 個月走勢圖（包含股價、成交量、10 日均線及 MACD）。
 """)
 
-# 初始化 Git 倉庫（僅首次執行）
 if 'repo_initialized' not in st.session_state:
     try:
         repo_manager = GitRepoManager(".", REPO_URL, st.secrets.get("TOKEN", ""))
@@ -55,7 +47,6 @@ if 'repo_initialized' not in st.session_state:
         st.error(f"Git 倉庫初始化失敗：{str(e)}")
         st.session_state['repo_initialized'] = False
 
-# 初始化資料庫（檢查檔案是否存在並診斷）
 def init_database():
     if not os.path.exists(DB_PATH):
         st.error("資料庫 stocks.db 不存在，請點擊「初始化並更新資料庫」")
@@ -66,7 +57,7 @@ def init_database():
             st.write(line)
         if st.button("重建資料庫"):
             os.remove(DB_PATH)
-            with open(DB_PATH, "wb") as f:  # 創建空檔案，後續由 update_database 填入結構
+            with open(DB_PATH, "wb") as f:
                 pass
             repo_manager = st.session_state.get('repo_manager')
             if repo_manager:
@@ -75,10 +66,8 @@ def init_database():
 
 init_database()
 
-# 提供檢查比例選擇
-check_percentage = st.slider("檢查和更新比例 (%)", 0, 100, 10, help="選擇要檢查和更新的股票比例（從末尾開始") / 100.0
+check_percentage = st.slider("檢查和更新比例 (%)", 0, 100, 10, help="選擇要檢查和更新的股票比例") / 100.0
 
-# 更新和初始化按鈕
 if st.button("初始化並更新資料庫", key="init_and_update"):
     repo_manager = GitRepoManager(".", REPO_URL, st.secrets.get("TOKEN", ""))
     st.session_state['repo_manager'] = repo_manager
@@ -113,27 +102,24 @@ if st.button("更新資料庫", key="update_db"):
     else:
         st.error("Git 倉庫未初始化，請先點擊「初始化並更新資料庫」")
 
-# 用戶輸入參數（使用 st.form）
 with st.sidebar.form(key="screening_form"):
     st.header("篩選參數")
     index_option = st.selectbox("選擇股票池", ["NASDAQ 100", "S&P 500", "NASDAQ All"])
     prior_days = st.slider("前段上升天數", 10, 30, 20)
-    consol_days = st.slider("盤整天數", 5, 15, 10, help="盤整天數是指股票在突破前低波動盤整的天數")
+    consol_days = st.slider("盤整天數", 5, 15, 10)
     min_rise_22 = st.slider("22 日內最小漲幅 (%)", 0, 50, 10)
     min_rise_67 = st.slider("67 日內最小漲幅 (%)", 0, 100, 40)
     min_rise_126 = st.slider("126 日內最小漲幅 (%)", 0, 300, 80)
     max_range = st.slider("最大盤整範圍 (%)", 3, 15, 10)
     min_adr = st.slider("最小 ADR (%)", 0, 10, 2)
-    max_stock_percentage = st.slider("篩選股票比例 (%)", 10, 100, 50, help="選擇要篩選的股票池比例（10%-100%）") / 100.0
+    max_stock_percentage = st.slider("篩選股票比例 (%)", 10, 100, 50) / 100.0
     submit_button = st.form_submit_button("運行篩選")
 
-# 重置按鈕
 if st.sidebar.button("重置篩選", key="reset_screening"):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
 
-# 即時股票查詢功能
 st.sidebar.header("即時股票查詢")
 query_ticker = st.sidebar.text_input("輸入股票代碼（例如 AAPL）")
 if st.sidebar.button("查詢股票"):
@@ -156,8 +142,8 @@ if st.sidebar.button("查詢股票"):
                 latest_date = result['Date'].max()
                 latest_result = result[result['Date'] == latest_date].copy()
                 latest_result['Status'] = latest_result.apply(
-                    lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume']
-                    else "已突破但成交量不足" if row['Breakout']
+                    lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume'] and row['Candle_Strength']
+                    else "已突破但條件不足" if row['Breakout']
                     else "盤整中" if row['Consolidation_Range_%'] < max_range
                     else "前段上升", axis=1
                 )
@@ -165,9 +151,12 @@ if st.sidebar.button("查詢股票"):
                     'Ticker': '股票代碼', 'Date': '日期', 'Price': '價格',
                     'Prior_Rise_22_%': '22 日內漲幅 (%)', 'Prior_Rise_67_%': '67 日內漲幅 (%)',
                     'Prior_Rise_126_%': '126 日內漲幅 (%)', 'Consolidation_Range_%': '盤整範圍 (%)',
-                    'ADR_%': '平均日波幅 (%)', 'Breakout': '是否突破', 'Breakout_Volume': '突破成交量'
+                    'ADR_%': '平均日波幅 (%)', 'Breakout': '是否突破', 'Breakout_Volume': '突破成交量',
+                    'Candle_Strength': 'K線強度', 'Stop_Loss': '止損點',
+                    'Target_20%': '目標20%', 'Target_50%': '目標50%', 'Target_100%': '目標100%'
                 })
-                desired_columns = ['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '126 日內漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']
+                desired_columns = ['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '126 日內漲幅 (%)', 
+                                   '盤整範圍 (%)', '平均日波幅 (%)', 'Status', 'K線強度', '止損點', '目標20%', '目標50%', '目標100%']
                 available_columns = [col for col in desired_columns if col in display_df.columns]
                 st.dataframe(display_df[available_columns])
                 if latest_result['Status'].iloc[0] == "已突破且可買入":
@@ -177,7 +166,6 @@ if st.sidebar.button("查詢股票"):
             else:
                 st.error(f"無法獲取 {query_ticker} 的數據或分析失敗")
 
-# 處理股票池選擇和篩選
 if submit_button:
     if 'df' in st.session_state:
         del st.session_state['df']
@@ -196,8 +184,8 @@ if submit_button:
     else:
         tickers = get_nasdaq_all(csv_tickers)
     total_tickers = len(tickers)
-    max_stocks = int(total_tickers * max_stock_percentage)  # 根據百分比計算最大股票數
-    tickers = tickers[:max_stocks]  # 限制篩選範圍
+    max_stocks = int(total_tickers * max_stock_percentage)
+    tickers = tickers[:max_stocks]
     st.session_state['tickers'] = tickers
 
     if not os.path.exists(DB_PATH):
@@ -219,17 +207,11 @@ if submit_button:
             )
             progress_bar.progress(1.0)
             if df.empty:
-                st.warning("無符合條件的股票，請調整以下參數：")
-                st.write(f"- 降低 22 日內最小漲幅（當前: {min_rise_22}%）")
-                st.write(f"- 降低 67 日內最小漲幅（當前: {min_rise_67}%）")
-                st.write(f"- 降低 126 日內最小漲幅（當前: {min_rise_126}%）")
-                st.write(f"- 增加最大盤整範圍（當前: {max_range}%）")
-                st.write(f"- 降低最小 ADR（當前: {min_adr}%）")
+                st.warning("無符合條件的股票，請調整參數")
             else:
                 st.session_state['df'] = df
                 st.success(f"找到 {len(df)} 筆符合條件的記錄（{len(df['Ticker'].unique())} 隻股票）")
 
-# 顯示篩選結果
 if 'df' in st.session_state:
     df = st.session_state['df']
     st.subheader("篩選結果")
@@ -237,8 +219,8 @@ if 'df' in st.session_state:
     latest_date = df['Date'].max()
     latest_df = df[df['Date'] == latest_date].copy()
     latest_df['Status'] = latest_df.apply(
-        lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume']
-        else "已突破但成交量不足" if row['Breakout']
+        lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume'] and row['Candle_Strength']
+        else "已突破但條件不足" if row['Breakout']
         else "盤整中" if row['Consolidation_Range_%'] < max_range
         else "前段上升", axis=1
     )
@@ -247,10 +229,13 @@ if 'df' in st.session_state:
         'Ticker': '股票代碼', 'Date': '日期', 'Price': '價格',
         'Prior_Rise_22_%': '22 日內漲幅 (%)', 'Prior_Rise_67_%': '67 日內漲幅 (%)',
         'Prior_Rise_126_%': '126 日內漲幅 (%)', 'Consolidation_Range_%': '盤整範圍 (%)',
-        'ADR_%': '平均日波幅 (%)', 'Breakout': '是否突破', 'Breakout_Volume': '突破成交量'
+        'ADR_%': '平均日波幅 (%)', 'Breakout': '是否突破', 'Breakout_Volume': '突破成交量',
+        'Candle_Strength': 'K線強度', 'Stop_Loss': '止損點',
+        'Target_20%': '目標20%', 'Target_50%': '目標50%', 'Target_100%': '目標100%'
     })
 
-    desired_columns = ['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '126 日內漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']
+    desired_columns = ['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '126 日內漲幅 (%)', 
+                       '盤整範圍 (%)', '平均日波幅 (%)', 'Status', 'K線強度', '止損點', '目標20%', '目標50%', '目標100%']
     available_columns = [col for col in desired_columns if col in display_df.columns]
     if available_columns:
         st.dataframe(display_df[available_columns])
@@ -268,13 +253,12 @@ if 'df' in st.session_state:
         else:
             st.warning("無法繪製圖表：缺少 'Prior_Rise_22_%' 欄位")
 
-    breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume']]
+    breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume'] & latest_df['Candle_Strength']]
     if not breakout_df.empty:
         st.subheader("當前突破股票（可買入）")
         plot_breakout_stocks(breakout_df['Ticker'].unique(), consol_days)
     else:
         st.info("當前無突破股票")
 
-# 顯示篩選範圍
 tickers = st.session_state.get('tickers', [])
 st.write(f"篩選範圍：{index_option} ({len(tickers)} 隻股票)")
