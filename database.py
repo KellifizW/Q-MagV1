@@ -145,13 +145,16 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             last_updated = cursor.fetchone()
             current_date = datetime.now(US_EASTERN)
             end_date = get_last_trading_day(current_date)
+            # 如果當前日期早於假設的最後交易日，調整 end_date 為當前最後交易日
+            actual_current_date = datetime.now(US_EASTERN).date()
+            if actual_current_date < end_date:
+                end_date = get_last_trading_day(actual_current_date)
             st.write(f"調試：當前日期 {current_date.date()}，最後交易日 {end_date}")
 
             ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
             ticker_dates['last_date'] = pd.to_datetime(ticker_dates['last_date'], errors='coerce').dt.date
             existing_tickers = dict(zip(ticker_dates['Ticker'], ticker_dates['last_date']))
 
-            # 調試：顯示資料庫中股票的最後日期統計
             if ticker_dates.empty:
                 st.write("調試：資料庫中無股票數據")
             else:
@@ -165,10 +168,9 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             default_start_date = end_date - timedelta(days=210)
             required_start_date = end_date - timedelta(days=210 + lookback_days)
 
-            # 修改：檢查所有股票是否更新到 end_date
             for ticker in tickers:
                 last_date = existing_tickers.get(ticker)
-                if not last_date or last_date < end_date:  # 改為直接比較 end_date
+                if not last_date or last_date < end_date:
                     tickers_to_update.append(ticker)
                     ticker_start_dates[ticker] = last_date + timedelta(days=1) if last_date else default_start_date
                     st.write(f"調試：{ticker} 需要更新，最後日期 {last_date} 小於 {end_date}")
@@ -190,34 +192,59 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 batch_tickers = tickers_to_update[i:i + batch_size]
                 batch_start_dates = [ticker_start_dates[ticker] for ticker in batch_tickers]
                 start_date = min(batch_start_dates)
+                # 確保 start_date 早於 end_date
+                if start_date >= end_date:
+                    start_date = end_date - timedelta(days=1)
+                st.write(f"調試：批次 {batch_tickers}，下載範圍 {start_date} 至 {end_date}")
                 data = download_with_retry(batch_tickers, start=start_date, end=end_date)
 
                 if data is not None:
-                    df = data.reset_index()
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = [col[0] if col[1] == '' else f"{col[0]}_{col[1]}" for col in df.columns]
+                    if data.empty:
+                        st.warning(f"批次 {batch_tickers} 返回空數據，嘗試單獨下載")
+                        for ticker in batch_tickers:
+                            single_data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+                            if not single_data.empty:
+                                single_df = single_data.reset_index()
+                                single_df['Ticker'] = ticker
+                                single_df['Date'] = pd.to_datetime(single_df['Date']).dt.strftime('%Y-%m-%d')
+                                records = single_df.to_records(index=False)
+                                cursor.executemany('''INSERT OR IGNORE INTO stocks 
+                                    (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                                                   [(r.Date, r.Ticker, float(r.Open) if pd.notna(r.Open) else None,
+                                                     float(r.High) if pd.notna(r.High) else None,
+                                                     float(r.Low) if pd.notna(r.Low) else None,
+                                                     float(r.Close) if pd.notna(r.Close) else None,
+                                                     float(r.Close) if pd.notna(r.Close) else None,
+                                                     int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
+                            else:
+                                st.error(f"單獨下載 {ticker} 仍失敗")
+                    else:
+                        df = data.reset_index()
+                        if isinstance(df.columns, pd.MultiIndex):
+                            df.columns = [col[0] if col[1] == '' else f"{col[0]}_{col[1]}" for col in df.columns]
 
-                    for ticker in batch_tickers:
-                        ticker_df = df[
-                            [col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
-                        ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
-                        expected_columns = {'Date', 'Open', 'High', 'Low', 'Close', 'Volume'}
-                        if not expected_columns.issubset(ticker_df.columns):
-                            st.error(f"錯誤：ticker_df 缺少必要列，當前列名：{ticker_df.columns.tolist()}")
-                            continue
+                        for ticker in batch_tickers:
+                            ticker_df = df[
+                                [col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
+                            ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
+                            expected_columns = {'Date', 'Open', 'High', 'Low', 'Close', 'Volume'}
+                            if not expected_columns.issubset(ticker_df.columns):
+                                st.error(f"錯誤：ticker_df 缺少必要列，當前列名：{ticker_df.columns.tolist()}")
+                                continue
 
-                        ticker_df['Ticker'] = ticker
-                        ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
-                        records = ticker_df.to_records(index=False)
-                        cursor.executemany('''INSERT OR IGNORE INTO stocks 
-                            (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                                           [(r.Date, r.Ticker, float(r.Open) if pd.notna(r.Open) else None,
-                                             float(r.High) if pd.notna(r.High) else None,
-                                             float(r.Low) if pd.notna(r.Low) else None,
-                                             float(r.Close) if pd.notna(r.Close) else None,
-                                             float(r.Close) if pd.notna(r.Close) else None,
-                                             int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
+                            ticker_df['Ticker'] = ticker
+                            ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
+                            records = ticker_df.to_records(index=False)
+                            cursor.executemany('''INSERT OR IGNORE INTO stocks 
+                                (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                                               [(r.Date, r.Ticker, float(r.Open) if pd.notna(r.Open) else None,
+                                                 float(r.High) if pd.notna(r.High) else None,
+                                                 float(r.Low) if pd.notna(r.Low) else None,
+                                                 float(r.Close) if pd.notna(r.Close) else None,
+                                                 float(r.Close) if pd.notna(r.Close) else None,
+                                                 int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
 
                 conn.commit()
                 elapsed = time.time() - start_time
