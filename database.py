@@ -115,8 +115,9 @@ def init_database(repo_manager):
             st.error(f"初始化資料庫失敗：{str(e)}")
             st.session_state['db_initialized'] = False
 
-def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo_manager=None, check_percentage=0.1, lookback_days=30):
-    """增量更新資料庫，檢查至最後交易日"""
+def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo_manager=None,
+                    check_percentage=0.1, lookback_days=30):
+    """增量更新資料庫，檢查至最後交易日，並添加調試資訊"""
     if repo_manager is None:
         st.error("未提供 Git 倉庫管理物件")
         return False
@@ -143,11 +144,19 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             cursor.execute("SELECT last_updated FROM metadata")
             last_updated = cursor.fetchone()
             current_date = datetime.now(US_EASTERN)
-            end_date = get_last_trading_day(current_date)  # 使用最後交易日
+            end_date = get_last_trading_day(current_date)
+            st.write(f"調試：當前日期 {current_date.date()}，最後交易日 {end_date}")
 
             ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
             ticker_dates['last_date'] = pd.to_datetime(ticker_dates['last_date'], errors='coerce').dt.date
             existing_tickers = dict(zip(ticker_dates['Ticker'], ticker_dates['last_date']))
+
+            # 調試：顯示資料庫中股票的最後日期統計
+            if ticker_dates.empty:
+                st.write("調試：資料庫中無股票數據")
+            else:
+                st.write(
+                    f"調試：資料庫中有 {len(ticker_dates)} 隻股票，最早最後日期 {ticker_dates['last_date'].min()}, 最新最後日期 {ticker_dates['last_date'].max()}")
 
             num_to_check = max(1, int(len(tickers) * check_percentage))
             tickers_to_check = tickers[-num_to_check:]
@@ -156,23 +165,22 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             default_start_date = end_date - timedelta(days=210)
             required_start_date = end_date - timedelta(days=210 + lookback_days)
 
-            for ticker in tickers_to_check:
+            # 修改：檢查所有股票是否更新到 end_date
+            for ticker in tickers:
                 last_date = existing_tickers.get(ticker)
-                if not last_date or last_date < required_start_date:
+                if not last_date or last_date < end_date:  # 改為直接比較 end_date
                     tickers_to_update.append(ticker)
                     ticker_start_dates[ticker] = last_date + timedelta(days=1) if last_date else default_start_date
+                    st.write(f"調試：{ticker} 需要更新，最後日期 {last_date} 小於 {end_date}")
 
-            if not tickers_to_update and last_updated and pd.to_datetime(last_updated[0]).date() >= end_date and len(existing_tickers) >= len(tickers):
+            if not tickers_to_update:
+                st.write(f"調試：所有股票已更新至 {end_date}，無需更新")
+            logger.info(f"需更新的股票數量：{len(tickers_to_update)}")
+
+            if not tickers_to_update:
                 st.write(f"資料庫已是最新至 {end_date}，無需更新")
                 return True
 
-            if len(existing_tickers) < len(tickers):
-                for ticker in tickers:
-                    if ticker not in existing_tickers:
-                        tickers_to_update.append(ticker)
-                        ticker_start_dates[ticker] = default_start_date
-
-            logger.info(f"需更新的股票數量：{len(tickers_to_update)}")
             total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
             progress_bar = st.progress(0)
             status_text = st.empty()
@@ -183,45 +191,49 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 batch_start_dates = [ticker_start_dates[ticker] for ticker in batch_tickers]
                 start_date = min(batch_start_dates)
                 data = download_with_retry(batch_tickers, start=start_date, end=end_date)
-                
+
                 if data is not None:
                     df = data.reset_index()
                     if isinstance(df.columns, pd.MultiIndex):
                         df.columns = [col[0] if col[1] == '' else f"{col[0]}_{col[1]}" for col in df.columns]
-                    
+
                     for ticker in batch_tickers:
-                        ticker_df = df[[col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
+                        ticker_df = df[
+                            [col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
                         ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
                         expected_columns = {'Date', 'Open', 'High', 'Low', 'Close', 'Volume'}
                         if not expected_columns.issubset(ticker_df.columns):
                             st.error(f"錯誤：ticker_df 缺少必要列，當前列名：{ticker_df.columns.tolist()}")
                             continue
-                        
+
                         ticker_df['Ticker'] = ticker
                         ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
                         records = ticker_df.to_records(index=False)
                         cursor.executemany('''INSERT OR IGNORE INTO stocks 
                             (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
-                            [(r.Date, r.Ticker, float(r.Open) if pd.notna(r.Open) else None, 
-                              float(r.High) if pd.notna(r.High) else None, float(r.Low) if pd.notna(r.Low) else None, 
-                              float(r.Close) if pd.notna(r.Close) else None, float(r.Close) if pd.notna(r.Close) else None, 
-                              int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                                           [(r.Date, r.Ticker, float(r.Open) if pd.notna(r.Open) else None,
+                                             float(r.High) if pd.notna(r.High) else None,
+                                             float(r.Low) if pd.notna(r.Low) else None,
+                                             float(r.Close) if pd.notna(r.Close) else None,
+                                             float(r.Close) if pd.notna(r.Close) else None,
+                                             int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
 
                 conn.commit()
                 elapsed = time.time() - start_time
                 progress = min((i + batch_size) / len(tickers_to_update), 1.0)
                 eta = (elapsed / (i + batch_size)) * (len(tickers_to_update) - (i + batch_size)) if i > 0 else 0
-                status_text.text(f"處理中：{batch_tickers}，進度：{int(progress*100)}%，預估剩餘時間：{int(eta)}秒")
+                status_text.text(f"處理中：{batch_tickers}，進度：{int(progress * 100)}%，預估剩餘時間：{int(eta)}秒")
                 progress_bar.progress(progress)
 
-            cursor.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
+            cursor.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)",
+                           (end_date.strftime('%Y-%m-%d'),))
             conn.commit()
 
             if not os.path.exists(DB_PATH):
                 st.error(f"資料庫檔案 {DB_PATH} 不存在，無法推送")
                 return False
-    
+
             push_success = repo_manager.push(DB_PATH, f"Updated stocks.db to {end_date}")
             if push_success:
                 st.success(f"資料庫更新至 {end_date} 並成功推送至 GitHub")
@@ -235,7 +247,8 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
             if os.path.exists(DB_PATH):
                 with open(DB_PATH, "rb") as file:
-                    st.download_button(label="下載 stocks.db", data=file, file_name="stocks.db", mime="application/octet-stream")
+                    st.download_button(label="下載 stocks.db", data=file, file_name="stocks.db",
+                                       mime="application/octet-stream")
             return True
 
     except sqlite3.DatabaseError as e:
