@@ -1,7 +1,12 @@
 import pandas as pd
 import streamlit as st
 import numpy as np
+import logging
 from database import fetch_stock_data, fetch_yfinance_data
+
+# 設置日誌
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 def get_nasdaq_100(csv_tickers):
     try:
@@ -12,12 +17,14 @@ def get_nasdaq_100(csv_tickers):
         nasdaq_100 = df['Ticker'].tolist()
         return [ticker for ticker in nasdaq_100 if ticker in csv_tickers]
     except Exception as e:
+        logger.error(f"獲取 NASDAQ 100 失敗: {str(e)}")
         return [ticker for ticker in ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA'] if ticker in csv_tickers]
 
 def get_sp500():
     try:
         return pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]['Symbol'].tolist()
     except Exception as e:
+        logger.error(f"獲取 S&P 500 失敗: {str(e)}")
         return ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA']
 
 def get_nasdaq_all(csv_tickers):
@@ -25,12 +32,15 @@ def get_nasdaq_all(csv_tickers):
 
 def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, 
                         max_range=5, min_adr=5, use_candle_strength=True, show_all=False):
+    logger.info(f"開始分析股票批次，股票數量: {len(tickers)}")
     results = []
-    matched_tickers = set()  # 用於記錄最新日期符合條件的股票
+    matched_tickers = set()
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
-    current_date = pd.Timestamp.now(tz='US/Eastern').normalize()  # 使用 pd.Timestamp 並確保帶時區
+    current_date = pd.Timestamp.now(tz='US/Eastern').normalize()
+    logger.info(f"當前日期: {current_date}")
     
     for ticker in tickers:
+        logger.info(f"處理股票: {ticker}")
         if isinstance(data.columns, pd.MultiIndex):
             stock = data.xs(ticker, level='Ticker', axis=1)
         else:
@@ -38,30 +48,35 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             stock.columns = [col[0] for col in stock.columns]
         
         if not isinstance(stock, pd.DataFrame):
+            logger.warning(f"股票 {ticker} 的數據不是 DataFrame，跳過")
             continue
         
         # 提取並過濾數據
+        logger.info(f"提取 {ticker} 的收盤價、成交量、高價、低價")
         close = pd.Series(stock['Close']).dropna()
         volume = pd.Series(stock['Volume']).dropna()
         high = pd.Series(stock['High']).dropna()
         low = pd.Series(stock['Low']).dropna()
-        # 檢查索引是否帶時區，若無則本地化，若有則轉換
         dates = pd.to_datetime(stock.index)
         if dates.tz is None:
             dates = dates.tz_localize('US/Eastern')
         else:
             dates = dates.tz_convert('US/Eastern')
+        logger.info(f"日期範圍: {dates.min()} 至 {dates.max()}, 總天數: {len(dates)}")
         
         if len(close) < required_days:
+            logger.warning(f"股票 {ticker} 的數據天數 ({len(close)}) 小於所需天數 ({required_days})，跳過")
             continue
         
         valid_mask = dates <= current_date
         valid_dates = dates[valid_mask]
         if len(valid_dates) < required_days:
+            logger.warning(f"股票 {ticker} 的有效天數 ({len(valid_dates)}) 小於所需天數 ({required_days})，跳過")
             continue
         
         common_index = valid_dates.intersection(close.index).intersection(volume.index).intersection(high.index).intersection(low.index)
         if len(common_index) < required_days:
+            logger.warning(f"股票 {ticker} 的共同索引天數 ({len(common_index)}) 小於所需天數 ({required_days})，跳過")
             continue
         
         close = close.loc[common_index]
@@ -72,6 +87,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         dates = common_index
         
         # 漲幅計算
+        logger.info(f"計算 {ticker} 的漲幅")
         close_shift_22 = close.shift(22)
         close_shift_67 = close.shift(67)
         close_shift_126 = close.shift(126)
@@ -80,9 +96,11 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         rise_126 = (close / close_shift_126 - 1) * 100
         
         if rise_126.isna().all() or rise_67.isna().all() or rise_22.isna().all():
+            logger.warning(f"股票 {ticker} 的漲幅數據全為 NaN，跳過")
             continue
         
         # 盤整與突破計算
+        logger.info(f"計算 {ticker} 的盤整與突破條件")
         recent_high = close.rolling(consol_days).max()
         recent_low = close.rolling(consol_days).min()
         consolidation_range = (recent_high / recent_low - 1) * 100
@@ -137,8 +155,8 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                     'Target_100%': targets_filtered['100%'] if not targets_filtered.empty else pd.Series([None] * len(valid_dates))
                 })
                 results.append(matched)
+                logger.info(f"股票 {ticker} 符合條件，記錄數: {len(matched)}")
                 
-                # 只顯示最新日期符合條件的股票，並記錄到 matched_tickers
                 if dates[-1] in valid_dates:
                     matched_tickers.add(ticker)
                     st.write(f"股票 {ticker} 符合條件（最新）：22 日漲幅 = {rise_22.iloc[-1]:.2f}%, "
@@ -148,17 +166,21 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     if results:
         combined_results = pd.concat(results)
         st.write(f"找到 {len(combined_results)} 筆符合條件的記錄（{len(matched_tickers)} 隻股票）")
+        logger.info(f"分析完成，總記錄數: {len(combined_results)}, 符合股票數: {len(matched_tickers)}")
         return combined_results
     else:
         st.write("無符合條件的股票")
+        logger.info("分析完成，無符合條件的股票")
         return pd.DataFrame()
 
 def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, 
                   max_range=5, min_adr=5, use_candle_strength=True, progress_bar=None):
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
+    logger.info(f"開始篩選股票，所需天數: {required_days}")
     data, all_tickers = fetch_stock_data(tickers, trading_days=required_days)
     if data is None:
         st.error("無法從資料庫獲取數據")
+        logger.error("無法從資料庫獲取數據")
         return pd.DataFrame()
     
     if stock_pool == "NASDAQ 100":
@@ -169,6 +191,7 @@ def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_2
         tickers = get_nasdaq_all(all_tickers)
     
     st.write(f"篩選股票池：{stock_pool}，共 {len(tickers)} 隻股票")
+    logger.info(f"篩選股票池: {stock_pool}，股票數: {len(tickers)}")
     
     results = analyze_stock_batch(data, tickers, prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, 
                                   max_range, min_adr, use_candle_strength, show_all=False)
@@ -182,8 +205,11 @@ def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_2
 def screen_single_stock(ticker, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, 
                         max_range=5, min_adr=5, use_candle_strength=True):
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
+    logger.info(f"開始單一股票查詢: {ticker}，所需天數: {required_days}")
     data = fetch_yfinance_data(ticker, trading_days=required_days)
     if data is None:
+        logger.error(f"無法獲取 {ticker} 的數據")
         return pd.DataFrame()
+    logger.info(f"成功獲取 {ticker} 的數據，開始分析")
     return analyze_stock_batch(data, [ticker], prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, 
                                max_range, min_adr, use_candle_strength, show_all=True)
