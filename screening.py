@@ -45,7 +45,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         volume = pd.Series(stock['Volume']).dropna()
         high = pd.Series(stock['High']).dropna()
         low = pd.Series(stock['Low']).dropna()
-        dates = stock.index
+        dates = pd.to_datetime(stock.index)  # Ensure dates is a datetime index
         
         if len(close) < required_days:
             continue
