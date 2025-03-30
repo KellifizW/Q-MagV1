@@ -3,7 +3,7 @@ import os
 import sqlite3
 import pandas as pd
 import yfinance as yf
-yf.set_tz_cache_location("./yfinance_cache")  # 添加自定義緩存路徑
+yf.set_tz_cache_location("./yfinance_cache")
 from datetime import datetime, timedelta
 import streamlit as st
 import logging
@@ -12,11 +12,9 @@ import requests
 from git_utils import GitRepoManager
 from file_utils import check_and_fetch_lfs_file, diagnose_db_file
 
-# 設置日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# 常量定義
 REPO_DIR = "."
 DB_PATH = "stocks.db"
 TICKERS_CSV = "Tickers.csv"
@@ -25,21 +23,18 @@ US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 10
 
 def get_last_trading_day(current_date):
-    """計算最後一個交易日（排除周末，簡化版不含節假日）"""
     current_date = current_date.date() if isinstance(current_date, datetime) else current_date
-    while current_date.weekday() >= 5:  # 星期六=5，星期日=6
+    while current_date.weekday() >= 5:
         current_date -= timedelta(days=1)
     return current_date
 
 def get_next_trading_day(date):
-    """計算下一個交易日（排除周末）"""
     next_day = date + timedelta(days=1)
-    while next_day.weekday() >= 5:  # 星期六=5，星期日=6
+    while next_day.weekday() >= 5:
         next_day += timedelta(days=1)
     return next_day
 
 def download_with_retry(tickers, start, end, retries=2, delay=60):
-    """使用 yfinance 下載數據，失敗後重試"""
     for attempt in range(retries):
         try:
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
@@ -56,11 +51,10 @@ def download_with_retry(tickers, start, end, retries=2, delay=60):
     return None
 
 def fetch_yfinance_data(ticker, trading_days=136):
-    """從 yfinance 查詢單一股票的歷史數據"""
     try:
         end_date = get_last_trading_day(datetime.now(US_EASTERN))
         start_date = (end_date - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
-        end_date = get_next_trading_day(end_date).strftime('%Y-%m-%d')  # 確保包含最後交易日
+        end_date = get_next_trading_day(end_date).strftime('%Y-%m-%d')
         data = yf.download(ticker, start=start_date, end=end_date, progress=False)
         if data.empty:
             logger.warning(f"無法從 yfinance 獲取 {ticker} 的數據")
@@ -76,7 +70,6 @@ def fetch_yfinance_data(ticker, trading_days=136):
         return None
 
 def init_database(repo_manager):
-    """初始化資料庫，支援 LFS"""
     if 'db_initialized' not in st.session_state:
         token = st.secrets.get("TOKEN", "")
         try:
@@ -93,21 +86,22 @@ def init_database(repo_manager):
                     st.write("已從 GitHub 下載 stocks.db 並配置為 LFS 檔案")
                 else:
                     st.write("未找到遠端 stocks.db，將創建新資料庫")
-                    with sqlite3.connect(DB_PATH) as conn:
-                        conn.execute('''CREATE TABLE IF NOT EXISTS stocks (
-                            Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
-                            PRIMARY KEY (Date, Ticker))''')
-                        conn.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
-                    repo_manager.track_lfs(DB_PATH)
+            
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute('''CREATE TABLE IF NOT EXISTS stocks (
+                    Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
+                    PRIMARY KEY (Date, Ticker))''')
+                conn.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
+                # 新增索引
+                conn.execute('''CREATE INDEX IF NOT EXISTS idx_ticker_date ON stocks (Ticker, Date)''')
+                conn.commit()
             
             diagnostics = diagnose_db_file(DB_PATH)
             st.write("資料庫診斷資訊：")
             if diagnostics:
-                file_size_mb = os.path.getsize(DB_PATH) / (1024 * 1024)  # 轉換為 MB
+                file_size_mb = os.path.getsize(DB_PATH) / (1024 * 1024)
                 st.write(f"檢查檔案：{DB_PATH}")
                 st.write(f"檔案大小：{file_size_mb:.2f} MB")
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.execute("SELECT 1 FROM sqlite_master LIMIT 1")
             st.session_state['db_initialized'] = True
         except sqlite3.DatabaseError as e:
             st.error(f"資料庫無效：{str(e)}，是否重建資料庫？")
@@ -119,6 +113,7 @@ def init_database(repo_manager):
                         Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
                         PRIMARY KEY (Date, Ticker))''')
                     conn.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
+                    conn.execute('''CREATE INDEX IF NOT EXISTS idx_ticker_date ON stocks (Ticker, Date)''')
                 repo_manager.track_lfs(DB_PATH)
                 st.session_state['db_initialized'] = True
         except Exception as e:
@@ -127,7 +122,6 @@ def init_database(repo_manager):
 
 def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo_manager=None,
                     check_percentage=0.1, lookback_days=30):
-    """增量更新資料庫，檢查至最後交易日"""
     if repo_manager is None:
         st.error("未提供 Git 倉庫管理物件")
         return False
@@ -137,7 +131,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
     diagnostics = diagnose_db_file(db_path)
     st.write("資料庫診斷資訊：")
     if diagnostics:
-        file_size_mb = os.path.getsize(DB_PATH) / (1024 * 1024)  # 轉換為 MB
+        file_size_mb = os.path.getsize(DB_PATH) / (1024 * 1024)
         st.write(f"檢查檔案：{DB_PATH}")
         st.write(f"檔案大小：{file_size_mb:.2f} MB")
 
@@ -148,6 +142,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
                 PRIMARY KEY (Date, Ticker))''')
             cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
+            cursor.execute('''CREATE INDEX IF NOT EXISTS idx_ticker_date ON stocks (Ticker, Date)''')
 
             tickers_df = pd.read_csv(tickers_file)
             tickers = tickers_df['Ticker'].tolist()
@@ -160,7 +155,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             actual_current_date = datetime.now(US_EASTERN).date()
             if actual_current_date < end_date:
                 end_date = get_last_trading_day(actual_current_date)
-            end_date_for_download = get_next_trading_day(end_date)  # 確保包含最後交易日
+            end_date_for_download = get_next_trading_day(end_date)
 
             ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
             ticker_dates['last_date'] = pd.to_datetime(ticker_dates['last_date'], errors='coerce').dt.date
@@ -173,7 +168,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             default_start_date = end_date - timedelta(days=210)
             required_start_date = end_date - timedelta(days=210 + lookback_days)
 
-            for ticker in tickers_to_check:  # 只檢查指定比例的股票
+            for ticker in tickers_to_check:
                 last_date = existing_tickers.get(ticker)
                 if not last_date or last_date < end_date:
                     tickers_to_update.append(ticker)
@@ -223,16 +218,13 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                                                      float(r.Close) if pd.notna(r.Close) else None,
                                                      float(r.Close) if pd.notna(r.Close) else None,
                                                      int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
-                            else:
-                                st.error(f"單獨下載 {ticker} 仍失敗")
                     else:
                         df = data.reset_index()
                         if isinstance(df.columns, pd.MultiIndex):
                             df.columns = [col[0] if col[1] == '' else f"{col[0]}_{col[1]}" for col in df.columns]
 
                         for ticker in batch_tickers:
-                            ticker_df = df[
-                                [col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
+                            ticker_df = df[[col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
                             ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
                             expected_columns = {'Date', 'Open', 'High', 'Low', 'Close', 'Volume'}
                             if not expected_columns.issubset(ticker_df.columns):
@@ -271,58 +263,55 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             if push_success:
                 st.success(f"資料庫更新至 {end_date} 並成功推送至 GitHub")
             else:
-                st.warning("資料庫更新完成，但推送至 GitHub 失敗，詳情請查看日誌")
-                if st.button("手動推送至 GitHub"):
-                    if repo_manager.push(DB_PATH, "Manual push after update"):
-                        st.success("手動推送成功")
-                    else:
-                        st.error("手動推送失敗，請檢查網絡或認證設置")
-
-            if os.path.exists(DB_PATH):
-                with open(DB_PATH, "rb") as file:
-                    st.download_button(label="下載 stocks.db", data=file, file_name="stocks.db",
-                                       mime="application/octet-stream")
+                st.warning("資料庫更新完成，但推送至 GitHub 失敗")
             return True
 
     except sqlite3.DatabaseError as e:
-        st.error(f"資料庫錯誤：{str(e)}\n診斷資訊：\n{' '.join(diagnose_db_file(db_path))}")
+        st.error(f"資料庫錯誤：{str(e)}")
         return False
     except Exception as e:
         st.error(f"資料庫更新失敗：{str(e)}")
         return False
 
-def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
-    """提取股票數據，截至最後交易日"""
+def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70, batch_size=50):
     token = st.secrets.get("TOKEN", "")
     check_and_fetch_lfs_file(db_path, REPO_URL, token)
     
     if not os.path.exists(db_path):
-        st.error(f"資料庫檔案 {db_path} 不存在，請先初始化或更新資料庫")
+        st.error(f"資料庫檔案 {db_path} 不存在")
         return None, tickers
     
     diagnostics = diagnose_db_file(db_path)
     st.write("資料庫診斷資訊：")
     if diagnostics:
-        file_size_mb = os.path.getsize(DB_PATH) / (1024 * 1024)  # 轉換為 MB
+        file_size_mb = os.path.getsize(DB_PATH) / (1024 * 1024)
         st.write(f"檢查檔案：{DB_PATH}")
         st.write(f"檔案大小：{file_size_mb:.2f} MB")
     
     try:
-        with sqlite3.connect(db_path) as conn:
-            end_date = get_last_trading_day(datetime.now(US_EASTERN))
-            start_date = (end_date - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
-            query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?']*len(tickers))}) AND Date >= ?"
-            data = pd.read_sql_query(query, conn, params=tickers + [start_date], index_col='Date', parse_dates=['Date'])
+        end_date = get_last_trading_day(datetime.now(US_EASTERN))
+        start_date = (end_date - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
+        all_data = []
         
-        if data.empty:
+        with sqlite3.connect(db_path) as conn:
+            for i in range(0, len(tickers), batch_size):
+                batch_tickers = tickers[i:i + batch_size]
+                query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?'] * len(batch_tickers))}) AND Date >= ?"
+                batch_data = pd.read_sql_query(query, conn, params=batch_tickers + [start_date], 
+                                              index_col='Date', parse_dates=['Date'])
+                if not batch_data.empty:
+                    all_data.append(batch_data)
+        
+        if not all_data:
             st.error(f"無數據：{tickers}")
             return None, tickers
         
+        data = pd.concat(all_data)
         pivoted_data = data.pivot(columns='Ticker')
         st.write(f"數據提取至最後交易日：{end_date}")
         return pivoted_data, tickers
     except sqlite3.DatabaseError as e:
-        st.error(f"提取數據失敗：{str(e)}\n診斷資訊：\n{' '.join(diagnose_db_file(db_path))}")
+        st.error(f"提取數據失敗：{str(e)}")
         return None, tickers
     except Exception as e:
         st.error(f"提取數據失敗：{str(e)}")
