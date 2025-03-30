@@ -124,7 +124,7 @@ def init_database(repo_manager):
 
 def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo_manager=None,
                     check_percentage=0.1, lookback_days=30):
-    """增量更新資料庫，檢查至最後交易日，並添加調試資訊"""
+    """增量更新資料庫，檢查至最後交易日"""
     if repo_manager is None:
         st.error("未提供 Git 倉庫管理物件")
         return False
@@ -132,7 +132,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
     token = st.secrets.get("TOKEN", "")
     check_and_fetch_lfs_file(db_path, REPO_URL, token)
     diagnostics = diagnose_db_file(db_path)
-    st.write("資料庫檔案診斷資訊：")
     for line in diagnostics:
         st.write(line)
 
@@ -156,17 +155,10 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             if actual_current_date < end_date:
                 end_date = get_last_trading_day(actual_current_date)
             end_date_for_download = get_next_trading_day(end_date)  # 確保包含最後交易日
-            st.write(f"調試：當前日期 {current_date.date()}，最後交易日 {end_date}，下載截止日期 {end_date_for_download}")
 
             ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
             ticker_dates['last_date'] = pd.to_datetime(ticker_dates['last_date'], errors='coerce').dt.date
             existing_tickers = dict(zip(ticker_dates['Ticker'], ticker_dates['last_date']))
-
-            if ticker_dates.empty:
-                st.write("調試：資料庫中無股票數據")
-            else:
-                st.write(
-                    f"調試：資料庫中有 {len(ticker_dates)} 隻股票，最早最後日期 {ticker_dates['last_date'].min()}, 最新最後日期 {ticker_dates['last_date'].max()}")
 
             num_to_check = max(1, int(len(tickers) * check_percentage))
             tickers_to_check = tickers[-num_to_check:]
@@ -175,20 +167,23 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             default_start_date = end_date - timedelta(days=210)
             required_start_date = end_date - timedelta(days=210 + lookback_days)
 
-            for ticker in tickers:
+            for ticker in tickers_to_check:  # 只檢查指定比例的股票
                 last_date = existing_tickers.get(ticker)
                 if not last_date or last_date < end_date:
                     tickers_to_update.append(ticker)
                     ticker_start_dates[ticker] = last_date + timedelta(days=1) if last_date else default_start_date
-                    st.write(f"調試：{ticker} 需要更新，最後日期 {last_date} 小於 {end_date}")
 
-            if not tickers_to_update:
-                st.write(f"調試：所有股票已更新至 {end_date}，無需更新")
-            logger.info(f"需更新的股票數量：{len(tickers_to_update)}")
-
-            if not tickers_to_update:
+            if not tickers_to_update and last_updated and pd.to_datetime(last_updated[0]).date() >= end_date and len(existing_tickers) >= len(tickers):
                 st.write(f"資料庫已是最新至 {end_date}，無需更新")
                 return True
+
+            if len(existing_tickers) < len(tickers):
+                for ticker in tickers:
+                    if ticker not in existing_tickers:
+                        tickers_to_update.append(ticker)
+                        ticker_start_dates[ticker] = default_start_date
+
+            logger.info(f"需更新的股票數量：{len(tickers_to_update)}")
 
             total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
             progress_bar = st.progress(0)
@@ -201,7 +196,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 start_date = min(batch_start_dates)
                 if start_date >= end_date:
                     start_date = end_date - timedelta(days=1)
-                st.write(f"調試：批次 {batch_tickers}，下載範圍 {start_date} 至 {end_date_for_download}")
                 data = download_with_retry(batch_tickers, start=start_date, end=end_date_for_download)
 
                 if data is not None:
@@ -213,8 +207,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                                 single_df = single_data.reset_index()
                                 single_df['Ticker'] = ticker
                                 single_df['Date'] = pd.to_datetime(single_df['Date']).dt.strftime('%Y-%m-%d')
-                                st.write(
-                                    f"調試：{ticker} 單獨下載成功，數據行數 {len(single_df)}，日期範圍 {single_df['Date'].min()} 至 {single_df['Date'].max()}")
                                 records = single_df.to_records(index=False)
                                 cursor.executemany('''INSERT OR IGNORE INTO stocks 
                                     (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
@@ -225,13 +217,10 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                                                      float(r.Close) if pd.notna(r.Close) else None,
                                                      float(r.Close) if pd.notna(r.Close) else None,
                                                      int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
-                                st.write(f"調試：{ticker} 插入 {len(single_df)} 條記錄")
                             else:
                                 st.error(f"單獨下載 {ticker} 仍失敗")
                     else:
                         df = data.reset_index()
-                        st.write(
-                            f"調試：批次 {batch_tickers} 下載成功，數據行數 {len(df)}，日期範圍 {df['Date'].min()} 至 {df['Date'].max()}")
                         if isinstance(df.columns, pd.MultiIndex):
                             df.columns = [col[0] if col[1] == '' else f"{col[0]}_{col[1]}" for col in df.columns]
 
@@ -246,8 +235,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
                             ticker_df['Ticker'] = ticker
                             ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
-                            st.write(
-                                f"調試：{ticker} 處理後數據行數 {len(ticker_df)}，日期範圍 {ticker_df['Date'].min()} 至 {ticker_df['Date'].max()}")
                             records = ticker_df.to_records(index=False)
                             cursor.executemany('''INSERT OR IGNORE INTO stocks 
                                 (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
@@ -258,7 +245,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                                                  float(r.Close) if pd.notna(r.Close) else None,
                                                  float(r.Close) if pd.notna(r.Close) else None,
                                                  int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
-                            st.write(f"調試：{ticker} 插入 {len(ticker_df)} 條記錄")
 
                 conn.commit()
                 elapsed = time.time() - start_time
@@ -309,7 +295,6 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
         return None, tickers
     
     diagnostics = diagnose_db_file(db_path)
-    st.write("提取數據前的檔案診斷資訊：")
     for line in diagnostics:
         st.write(line)
     
