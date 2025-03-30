@@ -27,7 +27,7 @@ def get_nasdaq_all(csv_tickers):
     """直接使用 csv_tickers，不擴展"""
     return csv_tickers
 
-def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, max_range=5, min_adr=5):
+def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, max_range=5, min_adr=5, show_all=False):
     results = []
     failed_stocks = {}
     matched_count = 0
@@ -86,24 +86,26 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             breakout = (close > recent_high.shift(1)) & (close.shift(1) <= recent_high.shift(1))
             breakout_volume = volume > volume.rolling(10).mean() * 1.5
             
-            # 無論是否符合條件，都記錄最新一天的數據
-            latest_data = pd.DataFrame({
-                'Ticker': ticker,
-                'Date': dates[-1:],
-                'Price': close[-1:],
-                'Prior_Rise_22_%': rise_22[-1:],
-                'Prior_Rise_67_%': rise_67[-1:],
-                'Prior_Rise_126_%': rise_126[-1:],
-                'Consolidation_Range_%': consolidation_range[-1:],
-                'ADR_%': adr[-1:],
-                'Breakout': breakout[-1:],
-                'Breakout_Volume': breakout_volume[-1:]
-            })
-            results.append(latest_data)
-            
             mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & (rise_126 >= min_rise_126) & \
                    (consolidation_range <= max_range) & (adr >= min_adr)
             
+            # 如果 show_all=True，記錄最新一天數據（用於即時查詢）
+            if show_all:
+                latest_data = pd.DataFrame({
+                    'Ticker': ticker,
+                    'Date': dates[-1:],
+                    'Price': close[-1:],
+                    'Prior_Rise_22_%': rise_22[-1:],
+                    'Prior_Rise_67_%': rise_67[-1:],
+                    'Prior_Rise_126_%': rise_126[-1:],
+                    'Consolidation_Range_%': consolidation_range[-1:],
+                    'ADR_%': adr[-1:],
+                    'Breakout': breakout[-1:],
+                    'Breakout_Volume': breakout_volume[-1:]
+                })
+                results.append(latest_data)
+            
+            # 如果股票符合條件，記錄所有符合的數據點
             if mask.any():
                 matched_count += 1
                 matched = pd.DataFrame({
@@ -118,6 +120,9 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                     'Breakout': breakout[mask],
                     'Breakout_Volume': breakout_volume[mask]
                 })
+                # 如果不是 show_all 模式，只記錄符合條件的數據
+                if not show_all:
+                    results.append(matched)
                 st.write(f"股票 {ticker} 符合條件（最新）：22 日漲幅 = {rise_22.iloc[-1]:.2f}%, "
                          f"67 日漲幅 = {rise_67.iloc[-1]:.2f}%, 126 日漲幅 = {rise_126.iloc[-1]:.2f}%, "
                          f"盤整範圍 = {consolidation_range.iloc[-1]:.2f}%, ADR = {adr.iloc[-1]:.2f}%")
@@ -159,7 +164,7 @@ def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_2
     
     st.write(f"篩選股票池：{stock_pool}，共 {len(tickers)} 隻股票")
     
-    results = analyze_stock_batch(data, tickers, prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, max_range, min_adr)
+    results = analyze_stock_batch(data, tickers, prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, max_range, min_adr, show_all=False)
     
     if progress_bar:
         progress_bar.progress(1.0)
@@ -174,4 +179,4 @@ def screen_single_stock(ticker, prior_days=20, consol_days=10, min_rise_22=10, m
     if data is None:
         st.error(f"無法獲取 {ticker} 的數據")
         return pd.DataFrame()
-    return analyze_stock_batch(data, [ticker], prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, max_range, min_adr)
+    return analyze_stock_batch(data, [ticker], prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, max_range, min_adr, show_all=True)
