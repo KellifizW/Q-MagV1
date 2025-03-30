@@ -8,8 +8,8 @@ import streamlit as st
 import logging
 from pytz import timezone
 import requests
-from git_utils import GitRepoManager  # 新增模組
-from file_utils import check_and_fetch_lfs_file, diagnose_db_file  # 新增模組
+from git_utils import GitRepoManager
+from file_utils import check_and_fetch_lfs_file, diagnose_db_file
 
 # 設置日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -39,6 +39,23 @@ def download_with_retry(tickers, start, end, retries=2, delay=60):
                 time.sleep(delay)
     logger.error(f"yfinance 下載 {tickers} 最終失敗，經過 {retries} 次嘗試")
     return None
+
+def fetch_yfinance_data(ticker, trading_days=136):
+    """從 yfinance 查詢單一股票的歷史數據"""
+    try:
+        start_date = (datetime.now(US_EASTERN).date() - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
+        end_date = datetime.now(US_EASTERN).date().strftime('%Y-%m-%d')
+        data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+        if data.empty:
+            logger.warning(f"無法從 yfinance 獲取 {ticker} 的數據")
+            return None
+        data['Ticker'] = ticker
+        data.reset_index(inplace=True)
+        pivoted_data = data.pivot(columns='Ticker')
+        return pivoted_data
+    except Exception as e:
+        logger.error(f"查詢 {ticker} 數據失敗：{str(e)}")
+        return None
 
 def init_database(repo_manager):
     """初始化資料庫，支援 LFS"""
@@ -256,4 +273,4 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
 if __name__ == "__main__":
     repo_manager = GitRepoManager(REPO_DIR, REPO_URL, st.secrets.get("TOKEN", ""))
     init_database(repo_manager)
-    update_database(repo_manager=repo_manager)  # 修正參數名稱
+    update_database(repo_manager=repo_manager)
