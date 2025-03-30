@@ -45,7 +45,12 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         volume = pd.Series(stock['Volume']).dropna()
         high = pd.Series(stock['High']).dropna()
         low = pd.Series(stock['Low']).dropna()
-        dates = pd.to_datetime(stock.index).tz_localize('US/Eastern')  # 確保日期帶有時區
+        # 檢查索引是否帶時區，若無則本地化，若有則轉換
+        dates = pd.to_datetime(stock.index)
+        if dates.tz is None:
+            dates = dates.tz_localize('US/Eastern')
+        else:
+            dates = dates.tz_convert('US/Eastern')
         
         if len(close) < required_days:
             continue
