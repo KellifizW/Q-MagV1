@@ -12,6 +12,7 @@ import requests
 from git_utils import GitRepoManager
 from file_utils import check_and_fetch_lfs_file, diagnose_db_file
 
+# 設置日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -35,41 +36,54 @@ def get_next_trading_day(date):
     return next_day
 
 def download_with_retry(tickers, start, end, retries=2, delay=60):
+    logger.info(f"開始下載股票數據: {tickers}, 範圍: {start} 至 {end}")
     for attempt in range(retries):
         try:
             data = yf.download(tickers, start=start, end=end, group_by='ticker', progress=False)
             if data.empty:
-                logger.warning(f"批次數據為空，股票：{tickers}")
+                logger.warning(f"批次數據為空，股票: {tickers}")
                 return None
-            logger.info(f"成功下載股票數據：{tickers}")
+            logger.info(f"成功下載股票數據: {tickers}, 行數: {len(data)}")
             return data
         except Exception as e:
-            logger.warning(f"yfinance 下載失敗，股票：{tickers}，錯誤：{str(e)}，重試 {attempt + 1}/{retries}")
+            logger.warning(f"yfinance 下載失敗，股票: {tickers}，錯誤: {str(e)}，重試 {attempt + 1}/{retries}")
             if attempt < retries - 1:
                 time.sleep(delay)
     logger.error(f"yfinance 下載 {tickers} 最終失敗，經過 {retries} 次嘗試")
     return None
 
 def fetch_yfinance_data(ticker, trading_days=136):
+    logger.info(f"開始從 yfinance 獲取 {ticker} 的數據，所需天數: {trading_days}")
     try:
         end_date = get_last_trading_day(datetime.now(US_EASTERN))
         start_date = (end_date - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
-        end_date = get_next_trading_day(end_date).strftime('%Y-%m-%d')
-        data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+        end_date_str = get_next_trading_day(end_date).strftime('%Y-%m-%d')
+        logger.info(f"下載範圍: {start_date} 至 {end_date_str}")
+        
+        data = yf.download(ticker, start=start_date, end=end_date_str, progress=False)
         if data.empty:
-            logger.warning(f"無法從 yfinance 獲取 {ticker} 的數據")
+            logger.warning(f"無法從 yfinance 獲取 {ticker} 的數據，返回空數據")
             return None
+        
+        logger.info(f"成功下載 {ticker} 的數據，行數: {len(data)}, 列名: {data.columns.tolist()}")
         data = data.rename(columns={'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'})
         data['Ticker'] = ticker
+        logger.info(f"添加 Ticker 列後，數據形狀: {data.shape}")
+        
         data = data.reset_index()
-        # 設置日期索引並指定時區
+        logger.info(f"重置索引後，列名: {data.columns.tolist()}")
+        
         data.set_index('Date', inplace=True)
-        data.index = pd.to_datetime(data.index).tz_localize('US/Eastern')  # 明確指定時區為 US/Eastern
+        data.index = pd.to_datetime(data.index).tz_localize('US/Eastern')
+        logger.info(f"設置日期索引並本地化時區後，索引範圍: {data.index.min()} 至 {data.index.max()}")
+        
         data_pivoted = data.pivot(columns='Ticker')
         data_pivoted.columns = pd.MultiIndex.from_tuples([(col[0], col[1]) for col in data_pivoted.columns], names=[None, 'Ticker'])
+        logger.info(f"數據透視完成，列名: {data_pivoted.columns.tolist()}, 形狀: {data_pivoted.shape}")
+        
         return data_pivoted
     except Exception as e:
-        logger.error(f"查詢 {ticker} 數據失敗：{str(e)}")
+        logger.error(f"查詢 {ticker} 數據失敗: {str(e)}")
         return None
 
 def init_database(repo_manager):
@@ -281,13 +295,15 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70, batch_size=50):
 
     if not os.path.exists(db_path):
         st.error(f"資料庫檔案 {db_path} 不存在")
+        logger.error(f"資料庫檔案 {db_path} 不存在")
         return None, tickers
 
     try:
         current_date = datetime.now(US_EASTERN)
-        end_date = get_last_trading_day(current_date)  # 確保不超過當前日期
+        end_date = get_last_trading_day(current_date)
         start_date = (end_date - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
         end_date_str = end_date.strftime('%Y-%m-%d')
+        logger.info(f"從資料庫提取數據，股票: {tickers}, 範圍: {start_date} 至 {end_date_str}")
         all_data = []
 
         with sqlite3.connect(db_path) as conn:
@@ -298,20 +314,25 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70, batch_size=50):
                                                index_col='Date', parse_dates=['Date'])
                 if not batch_data.empty:
                     all_data.append(batch_data)
+                logger.info(f"提取批次 {batch_tickers}，數據行數: {len(batch_data)}")
 
         if not all_data:
             st.error(f"無數據：{tickers}")
+            logger.error(f"無數據返回，股票: {tickers}")
             return None, tickers
 
         data = pd.concat(all_data)
         pivoted_data = data.pivot(columns='Ticker')
         st.write(f"數據提取至最後交易日：{end_date}")
+        logger.info(f"數據提取完成，形狀: {pivoted_data.shape}, 列名: {pivoted_data.columns.tolist()}")
         return pivoted_data, tickers
     except sqlite3.DatabaseError as e:
         st.error(f"提取數據失敗：{str(e)}")
+        logger.error(f"提取數據失敗: {str(e)}")
         return None, tickers
     except Exception as e:
         st.error(f"提取數據失敗：{str(e)}")
+        logger.error(f"提取數據失敗: {str(e)}")
         return None, tickers
 
 if __name__ == "__main__":
