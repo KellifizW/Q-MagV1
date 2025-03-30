@@ -56,12 +56,17 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         if len(valid_dates) < required_days:
             continue
         
-        close = close.loc[valid_dates]
-        volume = volume.loc[valid_dates]
-        high = high.loc[valid_dates]
-        low = low.loc[valid_dates]
+        # 確保所有序列的索引與 valid_dates 一致
+        common_index = valid_dates.intersection(close.index).intersection(volume.index).intersection(high.index).intersection(low.index)
+        if len(common_index) < required_days:
+            continue
+        
+        close = close.loc[common_index]
+        volume = volume.loc[common_index]
+        high = high.loc[common_index]
+        low = low.loc[common_index]
         prev_close = close.shift(1)
-        dates = valid_dates
+        dates = common_index
         
         # 漲幅計算
         close_shift_22 = close.shift(22)
