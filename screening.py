@@ -36,7 +36,13 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     
     for ticker in tickers:
         try:
-            stock = data.xs(ticker, level='Ticker', axis=1)
+            # 檢查數據結構並提取股票數據
+            if isinstance(data.columns, pd.MultiIndex):
+                stock = data.xs(ticker, level='Ticker', axis=1)
+            else:
+                stock = data[[col for col in data.columns if ticker in col]].copy()
+                stock.columns = [col[0] for col in stock.columns]  # 移除多層索引中的 Ticker 層
+            
             if not isinstance(stock, pd.DataFrame):
                 failed_stocks[ticker] = f"stock 不是 DataFrame，類型為 {type(stock)}"
                 continue
