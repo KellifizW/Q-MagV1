@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
 import os
-from screening import screen_stocks, get_nasdaq_100, get_sp500, get_nasdaq_all
+from screening import screen_stocks, get_nasdaq_100, get_sp500, get_nasdaq_all, screen_single_stock
 from visualize import plot_top_5_stocks, plot_breakout_stocks
-from database import update_database  # 假設 database.py 已更新
-from git_utils import GitRepoManager  # 更新後的模組
-from file_utils import diagnose_db_file  # 從之前模組導入
+from database import update_database
+from git_utils import GitRepoManager
+from file_utils import diagnose_db_file
 from datetime import datetime, timedelta
 import logging
 
@@ -123,6 +123,50 @@ if st.sidebar.button("重置篩選", key="reset_screening"):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
+
+# 即時股票查詢功能
+st.sidebar.header("即時股票查詢")
+query_ticker = st.sidebar.text_input("輸入股票代碼（例如 AAPL）")
+if st.sidebar.button("查詢股票"):
+    if query_ticker:
+        with st.spinner(f"正在查詢 {query_ticker}..."):
+            result = screen_single_stock(
+                query_ticker,
+                prior_days=prior_days,
+                consol_days=consol_days,
+                min_rise_22=min_rise_22,
+                min_rise_67=min_rise_67,
+                min_rise_126=min_rise_126,
+                max_range=max_range,
+                min_adr=min_adr
+            )
+            st.session_state['query_result'] = result
+            st.subheader(f"{query_ticker} 篩選結果")
+            if not result.empty:
+                result['Date'] = pd.to_datetime(result['Date']).dt.strftime('%Y-%m-%d')
+                latest_date = result['Date'].max()
+                latest_result = result[result['Date'] == latest_date].copy()
+                latest_result['Status'] = latest_result.apply(
+                    lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume']
+                    else "已突破但成交量不足" if row['Breakout']
+                    else "盤整中" if row['Consolidation_Range_%'] < max_range
+                    else "前段上升", axis=1
+                )
+                display_df = latest_result.rename(columns={
+                    'Ticker': '股票代碼', 'Date': '日期', 'Price': '價格',
+                    'Prior_Rise_22_%': '22 日內漲幅 (%)', 'Prior_Rise_67_%': '67 日內漲幅 (%)',
+                    'Prior_Rise_126_%': '126 日內漲幅 (%)', 'Consolidation_Range_%': '盤整範圍 (%)',
+                    'ADR_%': '平均日波幅 (%)', 'Breakout': '是否突破', 'Breakout_Volume': '突破成交量'
+                })
+                desired_columns = ['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '126 日內漲幅 (%)', '盤整範圍 (%)', '平均日波幅 (%)', 'Status']
+                available_columns = [col for col in desired_columns if col in display_df.columns]
+                st.dataframe(display_df[available_columns])
+                if latest_result['Status'].iloc[0] == "已突破且可買入":
+                    st.success(f"{query_ticker} 符合條件：已突破且可買入")
+                else:
+                    st.warning(f"{query_ticker} 不符合條件，當前狀態：{latest_result['Status'].iloc[0]}")
+            else:
+                st.error(f"無法獲取 {query_ticker} 的數據或分析失敗")
 
 # 處理股票池選擇和篩選
 if submit_button:
