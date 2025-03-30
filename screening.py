@@ -1,6 +1,6 @@
 import pandas as pd
 import streamlit as st
-import numpy as np  # 新增 numpy 導入
+import numpy as np
 from database import fetch_stock_data, fetch_yfinance_data
 
 def get_nasdaq_100(csv_tickers):
@@ -34,7 +34,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
     sufficient_data_tickers = []
     insufficient_data_tickers = []
-    current_date = np.datetime64(pd.Timestamp.now(tz='US/Eastern').normalize())  # 修改為 datetime64[ns]
+    current_date = np.datetime64(pd.Timestamp.now(tz='US/Eastern').normalize())
     
     for ticker in tickers:
         try:
@@ -48,11 +48,11 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                 failed_stocks[ticker] = f"stock 不是 DataFrame，類型為 {type(stock)}"
                 continue
             
+            # 提取並過濾數據
             close = pd.Series(stock['Close']).dropna()
             volume = pd.Series(stock['Volume']).dropna()
             high = pd.Series(stock['High']).dropna()
             low = pd.Series(stock['Low']).dropna()
-            prev_close = close.shift(1)
             dates = stock.index
             
             if len(close) < required_days:
@@ -62,14 +62,20 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             else:
                 sufficient_data_tickers.append(ticker)
             
-            # 限制日期範圍到當前日期之前
+            # 限制日期範圍並同步索引
             valid_mask = dates <= current_date
-            close = close[valid_mask]
-            volume = volume[valid_mask]
-            high = high[valid_mask]
-            low = low[valid_mask]
-            prev_close = prev_close[valid_mask]
-            dates = dates[valid_mask]
+            valid_dates = dates[valid_mask]
+            if len(valid_dates) < required_days:
+                insufficient_data_tickers.append(ticker)
+                failed_stocks[ticker] = f"有效數據長度不足，長度 {len(valid_dates)}，需 {required_days}"
+                continue
+            
+            close = close.loc[valid_dates]
+            volume = volume.loc[valid_dates]
+            high = high.loc[valid_dates]
+            low = low.loc[valid_dates]
+            prev_close = close.shift(1)
+            dates = valid_dates  # 更新 dates
             
             # 漲幅計算
             close_shift_22 = close.shift(22)
@@ -140,20 +146,20 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                 matched_count += 1
                 valid_dates = dates[mask]
                 if not valid_dates.empty:
-                    targets_filtered = targets.loc[valid_dates] if not targets.empty else pd.DataFrame(index=valid_dates, columns=['20%', '50%', '100%'])
+                    targets_filtered = targets.reindex(valid_dates).fillna(method='ffill') if not targets.empty else pd.DataFrame(index=valid_dates, columns=['20%', '50%', '100%'])
                     matched = pd.DataFrame({
                         'Ticker': ticker,
                         'Date': valid_dates,
-                        'Price': close[mask],
-                        'Prior_Rise_22_%': rise_22[mask],
-                        'Prior_Rise_67_%': rise_67[mask],
-                        'Prior_Rise_126_%': rise_126[mask],
-                        'Consolidation_Range_%': consolidation_range[mask],
-                        'ADR_%': adr[mask],
-                        'Breakout': breakout[mask],
-                        'Breakout_Volume': breakout_volume[mask],
-                        'Candle_Strength': candle_strength[mask],
-                        'Stop_Loss': stop_loss[mask],
+                        'Price': close.loc[valid_dates],
+                        'Prior_Rise_22_%': rise_22.loc[valid_dates],
+                        'Prior_Rise_67_%': rise_67.loc[valid_dates],
+                        'Prior_Rise_126_%': rise_126.loc[valid_dates],
+                        'Consolidation_Range_%': consolidation_range.loc[valid_dates],
+                        'ADR_%': adr.loc[valid_dates],
+                        'Breakout': breakout.loc[valid_dates],
+                        'Breakout_Volume': breakout_volume.loc[valid_dates],
+                        'Candle_Strength': candle_strength.loc[valid_dates],
+                        'Stop_Loss': stop_loss.loc[valid_dates],
                         'Target_20%': targets_filtered['20%'] if not targets_filtered.empty else pd.Series([None] * len(valid_dates)),
                         'Target_50%': targets_filtered['50%'] if not targets_filtered.empty else pd.Series([None] * len(valid_dates)),
                         'Target_100%': targets_filtered['100%'] if not targets_filtered.empty else pd.Series([None] * len(valid_dates))
