@@ -139,7 +139,9 @@ if st.sidebar.button("查詢股票"):
             )
             st.session_state['query_result'] = result
             st.subheader(f"{query_ticker} 篩選結果")
-            if not result.empty:
+            if result.empty:
+                st.error(f"無法從 yfinance 獲取 {query_ticker} 的數據，請檢查股票代碼或網絡連線")
+            else:
                 result['Date'] = pd.to_datetime(result['Date']).dt.strftime('%Y-%m-%d')
                 latest_date = result['Date'].max()
                 latest_result = result[result['Date'] == latest_date].copy()
@@ -165,8 +167,6 @@ if st.sidebar.button("查詢股票"):
                     st.success(f"{query_ticker} 符合條件：已突破且可買入")
                 else:
                     st.warning(f"{query_ticker} 不符合條件，當前狀態：{latest_result['Status'].iloc[0]}")
-            else:
-                st.error(f"無法獲取 {query_ticker} 的數據或分析失敗")
 
 if submit_button:
     if 'df' in st.session_state:
@@ -213,8 +213,6 @@ if submit_button:
                 st.warning("無符合條件的股票，請調整參數")
             else:
                 st.session_state['df'] = df
-                # 移除這一行
-                # st.success(f"找到 {len(df)} 筆符合條件的記錄（{len(df['Ticker'].unique())} 隻股票）")
 
 if 'df' in st.session_state:
     df = st.session_state['df']
