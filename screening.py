@@ -26,6 +26,7 @@ def get_nasdaq_all(csv_tickers):
 def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, 
                         max_range=5, min_adr=5, use_candle_strength=True, show_all=False):
     results = []
+    matched_tickers = set()  # 用於記錄最新日期符合條件的股票
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
     current_date = np.datetime64(pd.Timestamp.now(tz='US/Eastern').normalize())
     
@@ -49,7 +50,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         if len(close) < required_days:
             continue
         
-        # 限制日期範圍並同步索引
         valid_mask = dates <= current_date
         valid_dates = dates[valid_mask]
         if len(valid_dates) < required_days:
@@ -106,7 +106,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & (rise_126 >= min_rise_126) & \
                (consolidation_range <= max_range) & (adr >= min_adr)
         
-        # 額外條件：僅當 show_all=False 時不要求突破條件
         if show_all:
             mask = mask & breakout & breakout_volume & candle_strength
         
@@ -134,16 +133,19 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                 })
                 results.append(matched)
                 
-                # 只顯示最新日期符合條件的股票
+                # 只顯示最新日期符合條件的股票，並記錄到 matched_tickers
                 if dates[-1] in valid_dates:
+                    matched_tickers.add(ticker)
                     st.write(f"股票 {ticker} 符合條件（最新）：22 日漲幅 = {rise_22.iloc[-1]:.2f}%, "
                              f"67 日漲幅 = {rise_67.iloc[-1]:.2f}%, 126 日漲幅 = {rise_126.iloc[-1]:.2f}%, "
                              f"盤整範圍 = {consolidation_range.iloc[-1]:.2f}%, ADR = {adr.iloc[-1]:.2f}%")
     
     if results:
         combined_results = pd.concat(results)
+        st.write(f"找到 {len(combined_results)} 筆符合條件的記錄（{len(matched_tickers)} 隻股票）")
         return combined_results
     else:
+        st.write("無符合條件的股票")
         return pd.DataFrame()
 
 def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, 
