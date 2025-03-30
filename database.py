@@ -194,7 +194,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 st.warning("資料庫更新完成，但推送至 GitHub 失敗，詳情請查看日誌")
             if st.button("手動推送至 GitHub"):
                 if repo_manager.push(DB_PATH, "Manual push after update"):
-            st.success("手動推送成功")
+                    st.success("手動推送成功")
                 else:
                     st.error("手動推送失敗，請檢查網絡或認證設置")
 
