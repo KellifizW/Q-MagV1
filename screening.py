@@ -1,6 +1,6 @@
 import pandas as pd
 import streamlit as st
-from database import fetch_stock_data
+from database import fetch_stock_data, fetch_yfinance_data
 
 def get_nasdaq_100(csv_tickers):
     """從 csv_tickers 過濾 NASDAQ 100 股票"""
@@ -32,7 +32,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     failed_stocks = {}
     matched_count = 0
     unmatched_count = 0
-    required_days = max(prior_days + consol_days + 30, 126 + consol_days)  # 確保涵蓋 126 天需求
+    required_days = max(prior_days + consol_days + 30, 126 + consol_days)
     
     for ticker in tickers:
         try:
@@ -52,7 +52,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                 failed_stocks[ticker] = f"數據長度不足，長度 {len(close)}，需 {required_days}"
                 continue
             
-            # 計算漲幅並檢查是否有效
             close_shift_22 = close.shift(22)
             close_shift_67 = close.shift(67)
             close_shift_126 = close.shift(126)
@@ -60,7 +59,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             rise_67 = (close / close_shift_67 - 1) * 100
             rise_126 = (close / close_shift_126 - 1) * 100
             
-            # 添加除錯訊息
             st.write(f"{ticker} - 22日數據點: {close_shift_22.notna().sum()}, 67日數據點: {close_shift_67.notna().sum()}, 126日數據點: {close_shift_126.notna().sum()}")
             
             if rise_126.isna().all():
@@ -73,7 +71,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                 failed_stocks[ticker] = f"無法計算 22 日漲幅，數據長度 {len(close)}，有效 22 日前數據點 {close_shift_22.notna().sum()}"
                 continue
             
-            # 後續計算邏輯保持不變
             recent_high = close.rolling(consol_days).max()
             recent_low = close.rolling(consol_days).min()
             consolidation_range = (recent_high / recent_low - 1) * 100
@@ -82,6 +79,21 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             adr = daily_range.rolling(prior_days).mean() * 100
             breakout = (close > recent_high.shift(1)) & (close.shift(1) <= recent_high.shift(1))
             breakout_volume = volume > volume.rolling(10).mean() * 1.5
+            
+            # 無論是否符合條件，都記錄最新一天的數據
+            latest_data = pd.DataFrame({
+                'Ticker': ticker,
+                'Date': dates[-1:],
+                'Price': close[-1:],
+                'Prior_Rise_22_%': rise_22[-1:],
+                'Prior_Rise_67_%': rise_67[-1:],
+                'Prior_Rise_126_%': rise_126[-1:],
+                'Consolidation_Range_%': consolidation_range[-1:],
+                'ADR_%': adr[-1:],
+                'Breakout': breakout[-1:],
+                'Breakout_Volume': breakout_volume[-1:]
+            })
+            results.append(latest_data)
             
             mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & (rise_126 >= min_rise_126) & \
                    (consolidation_range <= max_range) & (adr >= min_adr)
@@ -100,7 +112,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                     'Breakout': breakout[mask],
                     'Breakout_Volume': breakout_volume[mask]
                 })
-                results.append(matched)
                 st.write(f"股票 {ticker} 符合條件（最新）：22 日漲幅 = {rise_22.iloc[-1]:.2f}%, "
                          f"67 日漲幅 = {rise_67.iloc[-1]:.2f}%, 126 日漲幅 = {rise_126.iloc[-1]:.2f}%, "
                          f"盤整範圍 = {consolidation_range.iloc[-1]:.2f}%, ADR = {adr.iloc[-1]:.2f}%")
@@ -127,7 +138,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
 
 def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, max_range=5, min_adr=5, progress_bar=None):
     """主篩選函數，從 SQLite 查詢數據"""
-    # 動態計算所需交易天數
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
     data, all_tickers = fetch_stock_data(tickers, trading_days=required_days)
     if data is None:
@@ -150,3 +160,12 @@ def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_2
     
     st.session_state['stock_data'] = data
     return results
+
+def screen_single_stock(ticker, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, max_range=5, min_adr=5):
+    """篩選單一股票，使用 yfinance 數據"""
+    required_days = max(prior_days + consol_days + 30, 126 + consol_days)
+    data = fetch_yfinance_data(ticker, trading_days=required_days)
+    if data is None:
+        st.error(f"無法獲取 {ticker} 的數據")
+        return pd.DataFrame()
+    return analyze_stock_batch(data, [ticker], prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, max_range, min_adr)
