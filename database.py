@@ -92,7 +92,6 @@ def init_database(repo_manager):
                     Date TEXT, Ticker TEXT, Open REAL, High REAL, Low REAL, Close REAL, Adj_Close REAL, Volume INTEGER,
                     PRIMARY KEY (Date, Ticker))''')
                 conn.execute('''CREATE TABLE IF NOT EXISTS metadata (last_updated TEXT)''')
-                # 新增索引
                 conn.execute('''CREATE INDEX IF NOT EXISTS idx_ticker_date ON stocks (Ticker, Date)''')
                 conn.commit()
             
