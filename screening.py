@@ -96,7 +96,9 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         rise_22 = (close / close_shift_22 - 1) * 100
         rise_67 = (close / close_shift_67 - 1) * 100
         rise_126 = (close / close_shift_126 - 1) * 100
-        logger.info(f"{ticker} 最新漲幅 - 22日: {rise_22.iloc[-1]:.2f}%, 67日: {rise_67.iloc[-1]:.2f}%, 126日: {rise_126.iloc[-1]:.2f}%")
+        logger.info(f"{ticker} 最新漲幅 - 22日: {rise_22.iloc[-1] if not rise_22.empty else 'NaN'}%, "
+                    f"67日: {rise_67.iloc[-1] if not rise_67.empty else 'NaN'}%, "
+                    f"126日: {rise_126.iloc[-1] if not rise_126.empty else 'NaN'}%")
         
         if rise_126.isna().all() or rise_67.isna().all() or rise_22.isna().all():
             logger.warning(f"股票 {ticker} 的漲幅數據全為 NaN，跳過")
@@ -112,12 +114,14 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         adr = daily_range.rolling(prior_days).mean() * 100
         breakout = (close > recent_high.shift(1)) & (close.shift(1) <= recent_high.shift(1))
         breakout_volume = volume > volume.rolling(10).mean() * 1.5
-        logger.info(f"{ticker} 最新條件 - 盤整範圍: {consolidation_range.iloc[-1]:.2f}%, ADR: {adr.iloc[-1]:.2f}%, "
-                    f"突破: {breakout.iloc[-1]}, 突破成交量: {breakout_volume.iloc[-1]}")
+        logger.info(f"{ticker} 最新條件 - 盤整範圍: {consolidation_range.iloc[-1] if not consolidation_range.empty else 'NaN'}%, "
+                    f"ADR: {adr.iloc[-1] if not adr.empty else 'NaN'}%, "
+                    f"突破: {breakout.iloc[-1] if not breakout.empty else 'NaN'}, "
+                    f"突破成交量: {breakout_volume.iloc[-1] if not breakout_volume.empty else 'NaN'}")
         
         # K線強度計算
         candle_strength = (close - low) / (high - low) > 0.7 if use_candle_strength else pd.Series(True, index=close.index)
-        logger.info(f"{ticker} 最新 K線強度: {candle_strength.iloc[-1]}")
+        logger.info(f"{ticker} 最新 K線強度: {candle_strength.iloc[-1] if not candle_strength.empty else 'NaN'}")
         
         # 風險管理計算
         stop_loss = recent_low
@@ -134,7 +138,9 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         # 篩選條件
         mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & (rise_126 >= min_rise_126) & \
                (consolidation_range <= max_range) & (adr >= min_adr)
-        logger.info(f"{ticker} 篩選條件滿足的天數: {mask.sum()}, 總天數: {len(mask)}")
+        logger.info(f"{ticker} 篩選條件滿足的天數: {mask.sum()}, 總天數: {len(mask)}, "
+                    f"條件: rise_22>={min_rise_22}, rise_67>={min_rise_67}, rise_126>={min_rise_126}, "
+                    f"consolidation_range<={max_range}, adr>={min_adr}")
         
         if show_all:
             # 即時查詢時，顯示所有條件（包括突破條件），即使不滿足基本篩選條件，也返回最新一天數據
