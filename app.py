@@ -112,6 +112,7 @@ with st.sidebar.form(key="screening_form"):
     min_rise_126 = st.slider("126 日內最小漲幅 (%)", 0, 300, 80)
     max_range = st.slider("最大盤整範圍 (%)", 3, 15, 10)
     min_adr = st.slider("最小 ADR (%)", 0, 10, 2)
+    use_candle_strength = st.checkbox("啟用K線強度篩選", value=True, help="勾選以要求突破K線收盤價靠近高點 (>70%)")
     max_stock_percentage = st.slider("篩選股票比例 (%)", 10, 100, 50) / 100.0
     submit_button = st.form_submit_button("運行篩選")
 
@@ -133,7 +134,8 @@ if st.sidebar.button("查詢股票"):
                 min_rise_67=min_rise_67,
                 min_rise_126=min_rise_126,
                 max_range=max_range,
-                min_adr=min_adr
+                min_adr=min_adr,
+                use_candle_strength=use_candle_strength
             )
             st.session_state['query_result'] = result
             st.subheader(f"{query_ticker} 篩選結果")
@@ -142,7 +144,7 @@ if st.sidebar.button("查詢股票"):
                 latest_date = result['Date'].max()
                 latest_result = result[result['Date'] == latest_date].copy()
                 latest_result['Status'] = latest_result.apply(
-                    lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume'] and row['Candle_Strength']
+                    lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume'] and (not use_candle_strength or row['Candle_Strength'])
                     else "已突破但條件不足" if row['Breakout']
                     else "盤整中" if row['Consolidation_Range_%'] < max_range
                     else "前段上升", axis=1
@@ -203,6 +205,7 @@ if submit_button:
                 min_rise_126=min_rise_126,
                 max_range=max_range,
                 min_adr=min_adr,
+                use_candle_strength=use_candle_strength,
                 progress_bar=progress_bar
             )
             progress_bar.progress(1.0)
@@ -219,7 +222,7 @@ if 'df' in st.session_state:
     latest_date = df['Date'].max()
     latest_df = df[df['Date'] == latest_date].copy()
     latest_df['Status'] = latest_df.apply(
-        lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume'] and row['Candle_Strength']
+        lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume'] and (not use_candle_strength or row['Candle_Strength'])
         else "已突破但條件不足" if row['Breakout']
         else "盤整中" if row['Consolidation_Range_%'] < max_range
         else "前段上升", axis=1
@@ -253,7 +256,7 @@ if 'df' in st.session_state:
         else:
             st.warning("無法繪製圖表：缺少 'Prior_Rise_22_%' 欄位")
 
-    breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume'] & latest_df['Candle_Strength']]
+    breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume'] & (latest_df['Candle_Strength'] if use_candle_strength else True)]
     if not breakout_df.empty:
         st.subheader("當前突破股票（可買入）")
         plot_breakout_stocks(breakout_df['Ticker'].unique(), consol_days)
