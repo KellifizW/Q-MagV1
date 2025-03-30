@@ -12,14 +12,12 @@ def get_nasdaq_100(csv_tickers):
         nasdaq_100 = df['Ticker'].tolist()
         return [ticker for ticker in nasdaq_100 if ticker in csv_tickers]
     except Exception as e:
-        st.error(f"無法從 Wikipedia 獲取 Nasdaq-100 清單: {str(e)}")
         return [ticker for ticker in ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA'] if ticker in csv_tickers]
 
 def get_sp500():
     try:
         return pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]['Symbol'].tolist()
     except Exception as e:
-        st.error(f"無法從 Wikipedia 獲取 S&P 500 清單: {e}")
         return ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA']
 
 def get_nasdaq_all(csv_tickers):
@@ -28,12 +26,8 @@ def get_nasdaq_all(csv_tickers):
 def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, 
                         max_range=5, min_adr=5, use_candle_strength=True, show_all=False):
     results = []
-    failed_stocks = {}
     matched_count = 0
-    unmatched_count = 0
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
-    sufficient_data_tickers = []
-    insufficient_data_tickers = []
     current_date = np.datetime64(pd.Timestamp.now(tz='US/Eastern').normalize())
     
     for ticker in tickers:
@@ -45,7 +39,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                 stock.columns = [col[0] for col in stock.columns]
             
             if not isinstance(stock, pd.DataFrame):
-                failed_stocks[ticker] = f"stock 不是 DataFrame，類型為 {type(stock)}"
                 continue
             
             # 提取並過濾數據
@@ -56,18 +49,12 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             dates = stock.index
             
             if len(close) < required_days:
-                insufficient_data_tickers.append(ticker)
-                failed_stocks[ticker] = f"數據長度不足，長度 {len(close)}，需 {required_days}"
                 continue
-            else:
-                sufficient_data_tickers.append(ticker)
             
             # 限制日期範圍並同步索引
             valid_mask = dates <= current_date
             valid_dates = dates[valid_mask]
             if len(valid_dates) < required_days:
-                insufficient_data_tickers.append(ticker)
-                failed_stocks[ticker] = f"有效數據長度不足，長度 {len(valid_dates)}，需 {required_days}"
                 continue
             
             close = close.loc[valid_dates]
@@ -75,7 +62,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             high = high.loc[valid_dates]
             low = low.loc[valid_dates]
             prev_close = close.shift(1)
-            dates = valid_dates  # 更新 dates
+            dates = valid_dates
             
             # 漲幅計算
             close_shift_22 = close.shift(22)
@@ -86,10 +73,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             rise_126 = (close / close_shift_126 - 1) * 100
             
             if rise_126.isna().all() or rise_67.isna().all() or rise_22.isna().all():
-                insufficient_data_tickers.append(ticker)
-                if ticker in sufficient_data_tickers:
-                    sufficient_data_tickers.remove(ticker)
-                failed_stocks[ticker] = f"無法計算漲幅，數據長度 {len(close)}"
                 continue
             
             # 盤整與突破計算
@@ -145,6 +128,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             if mask.any():
                 matched_count += 1
                 valid_dates = dates[mask]
+                valid_dates = valid_dates[valid_dates.isin(dates)]  # 確保日期在索引中
                 if not valid_dates.empty:
                     targets_filtered = targets.reindex(valid_dates).fillna(method='ffill') if not targets.empty else pd.DataFrame(index=valid_dates, columns=['20%', '50%', '100%'])
                     matched = pd.DataFrame({
@@ -169,27 +153,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                     st.write(f"股票 {ticker} 符合條件（最新）：22 日漲幅 = {rise_22.iloc[-1]:.2f}%, "
                              f"67 日漲幅 = {rise_67.iloc[-1]:.2f}%, 126 日漲幅 = {rise_126.iloc[-1]:.2f}%, "
                              f"盤整範圍 = {consolidation_range.iloc[-1]:.2f}%, ADR = {adr.iloc[-1]:.2f}%")
-                else:
-                    failed_stocks[ticker] = f"無有效日期匹配 mask"
-            else:
-                unmatched_count += 1
-                
-        except Exception as e:
-            failed_stocks[ticker] = f"分析失敗：{str(e)}"
-            st.write(f"{ticker} 分析失敗：{str(e)}")
-    
-    if sufficient_data_tickers:
-        st.write(f"有足夠數據點之股票：{', '.join(sufficient_data_tickers)}")
-    if insufficient_data_tickers:
-        st.write(f"不足數據點之股票：{', '.join(insufficient_data_tickers)}")
-    
-    if failed_stocks:
-        st.warning(f"無法分析的股票：{failed_stocks}")
-    
-    total_analyzed = matched_count + unmatched_count + len(failed_stocks)
-    st.write(f"\n分析統計：共分析 {total_analyzed} 隻股票，"
-             f"符合條件 {matched_count} 隻，不符合條件 {unmatched_count} 隻，"
-             f"無法分析 {len(failed_stocks)} 隻")
     
     if results:
         combined_results = pd.concat(results)
@@ -228,7 +191,6 @@ def screen_single_stock(ticker, prior_days=20, consol_days=10, min_rise_22=10, m
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
     data = fetch_yfinance_data(ticker, trading_days=required_days)
     if data is None:
-        st.error(f"無法獲取 {ticker} 的數據")
         return pd.DataFrame()
     return analyze_stock_batch(data, [ticker], prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, 
                                max_range, min_adr, use_candle_strength, show_all=True)
