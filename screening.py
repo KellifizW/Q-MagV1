@@ -26,7 +26,6 @@ def get_nasdaq_all(csv_tickers):
 def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, 
                         max_range=5, min_adr=5, use_candle_strength=True, show_all=False):
     results = []
-    matched_count = 0
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
     current_date = np.datetime64(pd.Timestamp.now(tz='US/Eastern').normalize())
     
@@ -56,7 +55,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         if len(valid_dates) < required_days:
             continue
         
-        # 確保所有序列的索引與 valid_dates 一致
         common_index = valid_dates.intersection(close.index).intersection(volume.index).intersection(high.index).intersection(low.index)
         if len(common_index) < required_days:
             continue
@@ -106,33 +104,15 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         
         # 篩選條件
         mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & (rise_126 >= min_rise_126) & \
-               (consolidation_range <= max_range) & (adr >= min_adr) & \
-               (breakout & breakout_volume & candle_strength if show_all else True)
+               (consolidation_range <= max_range) & (adr >= min_adr)
         
+        # 額外條件：僅當 show_all=False 時不要求突破條件
         if show_all:
-            latest_data = pd.DataFrame({
-                'Ticker': ticker,
-                'Date': dates[-1:],
-                'Price': close[-1:],
-                'Prior_Rise_22_%': rise_22[-1:],
-                'Prior_Rise_67_%': rise_67[-1:],
-                'Prior_Rise_126_%': rise_126[-1:],
-                'Consolidation_Range_%': consolidation_range[-1:],
-                'ADR_%': adr[-1:],
-                'Breakout': breakout[-1:],
-                'Breakout_Volume': breakout_volume[-1:],
-                'Candle_Strength': candle_strength[-1:],
-                'Stop_Loss': stop_loss[-1:],
-                'Target_20%': targets['20%'][-1:] if not targets.empty else pd.Series([None]),
-                'Target_50%': targets['50%'][-1:] if not targets.empty else pd.Series([None]),
-                'Target_100%': targets['100%'][-1:] if not targets.empty else pd.Series([None])
-            })
-            results.append(latest_data)
+            mask = mask & breakout & breakout_volume & candle_strength
         
         if mask.any():
-            matched_count += 1
             valid_dates = dates[mask]
-            valid_dates = valid_dates[valid_dates.isin(dates)]  # 確保日期在索引中
+            valid_dates = valid_dates[valid_dates.isin(dates)]
             if not valid_dates.empty:
                 targets_filtered = targets.reindex(valid_dates).fillna(method='ffill') if not targets.empty else pd.DataFrame(index=valid_dates, columns=['20%', '50%', '100%'])
                 matched = pd.DataFrame({
@@ -152,11 +132,13 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                     'Target_50%': targets_filtered['50%'] if not targets_filtered.empty else pd.Series([None] * len(valid_dates)),
                     'Target_100%': targets_filtered['100%'] if not targets_filtered.empty else pd.Series([None] * len(valid_dates))
                 })
-                if not show_all:
-                    results.append(matched)
-                st.write(f"股票 {ticker} 符合條件（最新）：22 日漲幅 = {rise_22.iloc[-1]:.2f}%, "
-                         f"67 日漲幅 = {rise_67.iloc[-1]:.2f}%, 126 日漲幅 = {rise_126.iloc[-1]:.2f}%, "
-                         f"盤整範圍 = {consolidation_range.iloc[-1]:.2f}%, ADR = {adr.iloc[-1]:.2f}%")
+                results.append(matched)
+                
+                # 只顯示最新日期符合條件的股票
+                if dates[-1] in valid_dates:
+                    st.write(f"股票 {ticker} 符合條件（最新）：22 日漲幅 = {rise_22.iloc[-1]:.2f}%, "
+                             f"67 日漲幅 = {rise_67.iloc[-1]:.2f}%, 126 日漲幅 = {rise_126.iloc[-1]:.2f}%, "
+                             f"盤整範圍 = {consolidation_range.iloc[-1]:.2f}%, ADR = {adr.iloc[-1]:.2f}%")
     
     if results:
         combined_results = pd.concat(results)
