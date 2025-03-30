@@ -275,36 +275,31 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70, batch_size=50):
     token = st.secrets.get("TOKEN", "")
     check_and_fetch_lfs_file(db_path, REPO_URL, token)
-    
+
     if not os.path.exists(db_path):
         st.error(f"資料庫檔案 {db_path} 不存在")
         return None, tickers
-    
-    diagnostics = diagnose_db_file(db_path)
-    st.write("資料庫診斷資訊：")
-    if diagnostics:
-        file_size_mb = os.path.getsize(DB_PATH) / (1024 * 1024)
-        st.write(f"檢查檔案：{DB_PATH}")
-        st.write(f"檔案大小：{file_size_mb:.2f} MB")
-    
+
     try:
-        end_date = get_last_trading_day(datetime.now(US_EASTERN))
+        current_date = datetime.now(US_EASTERN)
+        end_date = get_last_trading_day(current_date)  # 確保不超過當前日期
         start_date = (end_date - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
+        end_date_str = end_date.strftime('%Y-%m-%d')
         all_data = []
-        
+
         with sqlite3.connect(db_path) as conn:
             for i in range(0, len(tickers), batch_size):
                 batch_tickers = tickers[i:i + batch_size]
-                query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?'] * len(batch_tickers))}) AND Date >= ?"
-                batch_data = pd.read_sql_query(query, conn, params=batch_tickers + [start_date], 
-                                              index_col='Date', parse_dates=['Date'])
+                query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?'] * len(batch_tickers))}) AND Date >= ? AND Date <= ?"
+                batch_data = pd.read_sql_query(query, conn, params=batch_tickers + [start_date, end_date_str],
+                                               index_col='Date', parse_dates=['Date'])
                 if not batch_data.empty:
                     all_data.append(batch_data)
-        
+
         if not all_data:
             st.error(f"無數據：{tickers}")
             return None, tickers
-        
+
         data = pd.concat(all_data)
         pivoted_data = data.pivot(columns='Ticker')
         st.write(f"數據提取至最後交易日：{end_date}")
