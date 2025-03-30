@@ -183,7 +183,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             cursor.execute("INSERT OR REPLACE INTO metadata (last_updated) VALUES (?)", (end_date.strftime('%Y-%m-%d'),))
             conn.commit()
 
-            push_success = repo_manager.push("Updated stocks.db with new data")
+            push_success = repo_manager.push(DB_PATH, "Updated stocks.db with new data")
             if push_success:
                 st.success("資料庫更新完成並成功推送至 GitHub")
             else:
