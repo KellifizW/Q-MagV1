@@ -37,7 +37,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     matched_tickers = set()
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
     current_date = pd.Timestamp.now(tz='US/Eastern').normalize()
-    logger.info(f"當前日期: {current_date}")
+    logger.info(f"當前日期: {current_date}, 所需天數: {required_days}")
     
     for ticker in tickers:
         logger.info(f"處理股票: {ticker}")
@@ -70,11 +70,13 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         
         valid_mask = dates <= current_date
         valid_dates = dates[valid_mask]
+        logger.info(f"有效日期範圍: {valid_dates.min()} 至 {valid_dates.max()}, 有效天數: {len(valid_dates)}")
         if len(valid_dates) < required_days:
             logger.warning(f"股票 {ticker} 的有效天數 ({len(valid_dates)}) 小於所需天數 ({required_days})，跳過")
             continue
         
         common_index = valid_dates.intersection(close.index).intersection(volume.index).intersection(high.index).intersection(low.index)
+        logger.info(f"共同索引天數: {len(common_index)}")
         if len(common_index) < required_days:
             logger.warning(f"股票 {ticker} 的共同索引天數 ({len(common_index)}) 小於所需天數 ({required_days})，跳過")
             continue
@@ -94,6 +96,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         rise_22 = (close / close_shift_22 - 1) * 100
         rise_67 = (close / close_shift_67 - 1) * 100
         rise_126 = (close / close_shift_126 - 1) * 100
+        logger.info(f"{ticker} 最新漲幅 - 22日: {rise_22.iloc[-1]:.2f}%, 67日: {rise_67.iloc[-1]:.2f}%, 126日: {rise_126.iloc[-1]:.2f}%")
         
         if rise_126.isna().all() or rise_67.isna().all() or rise_22.isna().all():
             logger.warning(f"股票 {ticker} 的漲幅數據全為 NaN，跳過")
@@ -109,9 +112,12 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         adr = daily_range.rolling(prior_days).mean() * 100
         breakout = (close > recent_high.shift(1)) & (close.shift(1) <= recent_high.shift(1))
         breakout_volume = volume > volume.rolling(10).mean() * 1.5
+        logger.info(f"{ticker} 最新條件 - 盤整範圍: {consolidation_range.iloc[-1]:.2f}%, ADR: {adr.iloc[-1]:.2f}%, "
+                    f"突破: {breakout.iloc[-1]}, 突破成交量: {breakout_volume.iloc[-1]}")
         
         # K線強度計算
         candle_strength = (close - low) / (high - low) > 0.7 if use_candle_strength else pd.Series(True, index=close.index)
+        logger.info(f"{ticker} 最新 K線強度: {candle_strength.iloc[-1]}")
         
         # 風險管理計算
         stop_loss = recent_low
@@ -128,11 +134,35 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         # 篩選條件
         mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & (rise_126 >= min_rise_126) & \
                (consolidation_range <= max_range) & (adr >= min_adr)
+        logger.info(f"{ticker} 篩選條件滿足的天數: {mask.sum()}, 總天數: {len(mask)}")
         
         if show_all:
-            mask = mask & breakout & breakout_volume & candle_strength
-        
-        if mask.any():
+            # 即時查詢時，顯示所有條件（包括突破條件），即使不滿足基本篩選條件，也返回最新一天數據
+            mask_full = mask & breakout & breakout_volume & candle_strength
+            logger.info(f"{ticker} 顯示所有條件滿足的天數: {mask_full.sum()}")
+            valid_dates = dates[-1:]  # 只取最新一天
+            targets_filtered = targets.reindex(valid_dates).fillna(method='ffill') if not targets.empty else pd.DataFrame(index=valid_dates, columns=['20%', '50%', '100%'])
+            matched = pd.DataFrame({
+                'Ticker': ticker,
+                'Date': valid_dates,
+                'Price': close.loc[valid_dates],
+                'Prior_Rise_22_%': rise_22.loc[valid_dates],
+                'Prior_Rise_67_%': rise_67.loc[valid_dates],
+                'Prior_Rise_126_%': rise_126.loc[valid_dates],
+                'Consolidation_Range_%': consolidation_range.loc[valid_dates],
+                'ADR_%': adr.loc[valid_dates],
+                'Breakout': breakout.loc[valid_dates],
+                'Breakout_Volume': breakout_volume.loc[valid_dates],
+                'Candle_Strength': candle_strength.loc[valid_dates],
+                'Stop_Loss': stop_loss.loc[valid_dates],
+                'Target_20%': targets_filtered['20%'],
+                'Target_50%': targets_filtered['50%'],
+                'Target_100%': targets_filtered['100%']
+            })
+            results.append(matched)
+            logger.info(f"股票 {ticker} 返回最新一天數據，記錄數: {len(matched)}")
+        elif mask.any():
+            # 普通篩選時，只返回滿足條件的數據
             valid_dates = dates[mask]
             valid_dates = valid_dates[valid_dates.isin(dates)]
             if not valid_dates.empty:
@@ -165,13 +195,17 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     
     if results:
         combined_results = pd.concat(results)
-        st.write(f"找到 {len(combined_results)} 筆符合條件的記錄（{len(matched_tickers)} 隻股票）")
+        st.write(f"找到 {len(combined_results)} 筆記錄（{len(matched_tickers)} 隻股票）")
         logger.info(f"分析完成，總記錄數: {len(combined_results)}, 符合股票數: {len(matched_tickers)}")
         return combined_results
     else:
-        st.write("無符合條件的股票")
-        logger.info("分析完成，無符合條件的股票")
-        return pd.DataFrame()
+        if show_all:
+            logger.info("分析完成，無數據返回（可能是數據處理失敗）")
+            return pd.DataFrame()
+        else:
+            st.write("無符合條件的股票")
+            logger.info("分析完成，無符合條件的股票")
+            return pd.DataFrame()
 
 def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, 
                   max_range=5, min_adr=5, use_candle_strength=True, progress_bar=None):
