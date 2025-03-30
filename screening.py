@@ -51,40 +51,43 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             logger.warning(f"股票 {ticker} 的數據不是 DataFrame，跳過")
             continue
         
-        # 提取並過濾數據
+        # 提取數據並統一索引
         logger.info(f"提取 {ticker} 的收盤價、成交量、高價、低價")
+        stock.index = pd.to_datetime(stock.index).tz_localize('US/Eastern', ambiguous='NaT', nonexistent='NaT')
+        dates = stock.index.dropna()
         close = pd.Series(stock['Close']).dropna()
         volume = pd.Series(stock['Volume']).dropna()
         high = pd.Series(stock['High']).dropna()
         low = pd.Series(stock['Low']).dropna()
-        dates = pd.to_datetime(stock.index)
-        if dates.tz is None:
-            dates = dates.tz_localize('US/Eastern')
-        else:
-            dates = dates.tz_convert('US/Eastern')
-        logger.info(f"日期範圍: {dates.min()} 至 {dates.max()}, 總天數: {len(dates)}")
         
-        if len(close) < required_days:
-            logger.warning(f"股票 {ticker} 的數據天數 ({len(close)}) 小於所需天數 ({required_days})，跳過")
+        logger.info(f"日期範圍: {dates.min()} 至 {dates.max()}, 總天數: {len(dates)}")
+        logger.info(f"close.index: {close.index.min()} 至 {close.index.max()}, 天數: {len(close)}")
+        logger.info(f"volume.index: {volume.index.min()} 至 {volume.index.max()}, 天數: {len(volume)}")
+        logger.info(f"high.index: {high.index.min()} 至 {high.index.max()}, 天數: {len(high)}")
+        logger.info(f"low.index: {low.index.min()} 至 {low.index.max()}, 天數: {len(low)}")
+        
+        if len(dates) < required_days:
+            logger.warning(f"股票 {ticker} 的數據天數 ({len(dates)}) 小於所需天數 ({required_days})，跳過")
             continue
         
         valid_mask = dates <= current_date
         valid_dates = dates[valid_mask]
-        logger.info(f"有效日期範圍: {valid_dates.min()} 至 {valid_dates.max()}, 有效天數: {len(valid_dates)}")
         if len(valid_dates) < required_days:
             logger.warning(f"股票 {ticker} 的有效天數 ({len(valid_dates)}) 小於所需天數 ({required_days})，跳過")
             continue
         
-        common_index = valid_dates.intersection(close.index).intersection(volume.index).intersection(high.index).intersection(low.index)
+        # 使用 stock 的索引作為基準
+        common_index = valid_dates
+        close = close.reindex(common_index)
+        volume = volume.reindex(common_index)
+        high = high.reindex(common_index)
+        low = low.reindex(common_index)
         logger.info(f"共同索引天數: {len(common_index)}")
+        
         if len(common_index) < required_days:
             logger.warning(f"股票 {ticker} 的共同索引天數 ({len(common_index)}) 小於所需天數 ({required_days})，跳過")
             continue
         
-        close = close.loc[common_index]
-        volume = volume.loc[common_index]
-        high = high.loc[common_index]
-        low = low.loc[common_index]
         prev_close = close.shift(1)
         dates = common_index
         
@@ -143,10 +146,9 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                     f"consolidation_range<={max_range}, adr>={min_adr}")
         
         if show_all:
-            # 即時查詢時，顯示所有條件（包括突破條件），即使不滿足基本篩選條件，也返回最新一天數據
             mask_full = mask & breakout & breakout_volume & candle_strength
             logger.info(f"{ticker} 顯示所有條件滿足的天數: {mask_full.sum()}")
-            valid_dates = dates[-1:]  # 只取最新一天
+            valid_dates = dates[-1:]
             targets_filtered = targets.reindex(valid_dates).fillna(method='ffill') if not targets.empty else pd.DataFrame(index=valid_dates, columns=['20%', '50%', '100%'])
             matched = pd.DataFrame({
                 'Ticker': ticker,
@@ -168,7 +170,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             results.append(matched)
             logger.info(f"股票 {ticker} 返回最新一天數據，記錄數: {len(matched)}")
         elif mask.any():
-            # 普通篩選時，只返回滿足條件的數據
             valid_dates = dates[mask]
             valid_dates = valid_dates[valid_dates.isin(dates)]
             if not valid_dates.empty:
