@@ -23,6 +23,13 @@ REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 US_EASTERN = timezone('US/Eastern')
 BATCH_SIZE = 10
 
+def get_last_trading_day(current_date):
+    """計算最後一個交易日（排除周末，簡化版不含節假日）"""
+    current_date = current_date.date() if isinstance(current_date, datetime) else current_date
+    while current_date.weekday() >= 5:  # 星期六=5，星期日=6
+        current_date -= timedelta(days=1)
+    return current_date
+
 def download_with_retry(tickers, start, end, retries=2, delay=60):
     """使用 yfinance 下載數據，失敗後重試"""
     for attempt in range(retries):
@@ -43,29 +50,18 @@ def download_with_retry(tickers, start, end, retries=2, delay=60):
 def fetch_yfinance_data(ticker, trading_days=136):
     """從 yfinance 查詢單一股票的歷史數據"""
     try:
-        start_date = (datetime.now(US_EASTERN).date() - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
-        end_date = datetime.now(US_EASTERN).date().strftime('%Y-%m-%d')
+        end_date = get_last_trading_day(datetime.now(US_EASTERN))
+        start_date = (end_date - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
+        end_date = end_date.strftime('%Y-%m-%d')
         data = yf.download(ticker, start=start_date, end=end_date, progress=False)
         if data.empty:
             logger.warning(f"無法從 yfinance 獲取 {ticker} 的數據")
             return None
-        # 重命名欄位以匹配資料庫結構
-        data = data.rename(columns={
-            'Open': 'Open',
-            'High': 'High',
-            'Low': 'Low',
-            'Close': 'Close',
-            'Volume': 'Volume'
-        })
+        data = data.rename(columns={'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'})
         data['Ticker'] = ticker
         data = data.reset_index()
-        # 創建與 fetch_stock_data 一致的多層索引結構
         data_pivoted = data.pivot(columns='Ticker')
-        # 確保欄位名稱正確
-        data_pivoted.columns = pd.MultiIndex.from_tuples(
-            [(col[0], col[1]) for col in data_pivoted.columns],
-            names=[None, 'Ticker']
-        )
+        data_pivoted.columns = pd.MultiIndex.from_tuples([(col[0], col[1]) for col in data_pivoted.columns], names=[None, 'Ticker'])
         return data_pivoted
     except Exception as e:
         logger.error(f"查詢 {ticker} 數據失敗：{str(e)}")
@@ -120,7 +116,7 @@ def init_database(repo_manager):
             st.session_state['db_initialized'] = False
 
 def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_SIZE, repo_manager=None, check_percentage=0.1, lookback_days=30):
-    """增量更新資料庫"""
+    """增量更新資料庫，檢查至最後交易日"""
     if repo_manager is None:
         st.error("未提供 Git 倉庫管理物件")
         return False
@@ -146,8 +142,8 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
             cursor.execute("SELECT last_updated FROM metadata")
             last_updated = cursor.fetchone()
-            current_date = datetime.now(US_EASTERN).date()
-            end_date = current_date - timedelta(days=1)
+            current_date = datetime.now(US_EASTERN)
+            end_date = get_last_trading_day(current_date)  # 使用最後交易日
 
             ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
             ticker_dates['last_date'] = pd.to_datetime(ticker_dates['last_date'], errors='coerce').dt.date
@@ -160,7 +156,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             default_start_date = end_date - timedelta(days=210)
             required_start_date = end_date - timedelta(days=210 + lookback_days)
 
-            # 檢查需要更新的股票
             for ticker in tickers_to_check:
                 last_date = existing_tickers.get(ticker)
                 if not last_date or last_date < required_start_date:
@@ -168,7 +163,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                     ticker_start_dates[ticker] = last_date + timedelta(days=1) if last_date else default_start_date
 
             if not tickers_to_update and last_updated and pd.to_datetime(last_updated[0]).date() >= end_date and len(existing_tickers) >= len(tickers):
-                st.write("資料庫已是最新且完整，無需更新")
+                st.write(f"資料庫已是最新至 {end_date}，無需更新")
                 return True
 
             if len(existing_tickers) < len(tickers):
@@ -183,11 +178,10 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             status_text = st.empty()
             start_time = time.time()
 
-            # 批次下載與處理
             for i in range(0, len(tickers_to_update), batch_size):
                 batch_tickers = tickers_to_update[i:i + batch_size]
                 batch_start_dates = [ticker_start_dates[ticker] for ticker in batch_tickers]
-                start_date = min(batch_start_dates)  # 取批次中最舊的日期
+                start_date = min(batch_start_dates)
                 data = download_with_retry(batch_tickers, start=start_date, end=end_date)
                 
                 if data is not None:
@@ -228,9 +222,9 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 st.error(f"資料庫檔案 {DB_PATH} 不存在，無法推送")
                 return False
     
-            push_success = repo_manager.push(DB_PATH, "Updated stocks.db with new data")
+            push_success = repo_manager.push(DB_PATH, f"Updated stocks.db to {end_date}")
             if push_success:
-                st.success("資料庫更新完成並成功推送至 GitHub")
+                st.success(f"資料庫更新至 {end_date} 並成功推送至 GitHub")
             else:
                 st.warning("資料庫更新完成，但推送至 GitHub 失敗，詳情請查看日誌")
                 if st.button("手動推送至 GitHub"):
@@ -252,7 +246,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
         return False
 
 def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
-    """提取股票數據"""
+    """提取股票數據，截至最後交易日"""
     token = st.secrets.get("TOKEN", "")
     check_and_fetch_lfs_file(db_path, REPO_URL, token)
     
@@ -267,7 +261,8 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
     
     try:
         with sqlite3.connect(db_path) as conn:
-            start_date = (datetime.now(US_EASTERN).date() - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
+            end_date = get_last_trading_day(datetime.now(US_EASTERN))
+            start_date = (end_date - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
             query = f"SELECT * FROM stocks WHERE Ticker IN ({','.join(['?']*len(tickers))}) AND Date >= ?"
             data = pd.read_sql_query(query, conn, params=tickers + [start_date], index_col='Date', parse_dates=['Date'])
         
@@ -276,6 +271,7 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
             return None, tickers
         
         pivoted_data = data.pivot(columns='Ticker')
+        st.write(f"數據提取至最後交易日：{end_date}")
         return pivoted_data, tickers
     except sqlite3.DatabaseError as e:
         st.error(f"提取數據失敗：{str(e)}\n診斷資訊：\n{' '.join(diagnose_db_file(db_path))}")
