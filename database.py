@@ -145,7 +145,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             last_updated = cursor.fetchone()
             current_date = datetime.now(US_EASTERN)
             end_date = get_last_trading_day(current_date)
-            # 如果當前日期早於假設的最後交易日，調整 end_date 為當前最後交易日
             actual_current_date = datetime.now(US_EASTERN).date()
             if actual_current_date < end_date:
                 end_date = get_last_trading_day(actual_current_date)
@@ -192,7 +191,6 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 batch_tickers = tickers_to_update[i:i + batch_size]
                 batch_start_dates = [ticker_start_dates[ticker] for ticker in batch_tickers]
                 start_date = min(batch_start_dates)
-                # 確保 start_date 早於 end_date
                 if start_date >= end_date:
                     start_date = end_date - timedelta(days=1)
                 st.write(f"調試：批次 {batch_tickers}，下載範圍 {start_date} 至 {end_date}")
@@ -207,6 +205,8 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                                 single_df = single_data.reset_index()
                                 single_df['Ticker'] = ticker
                                 single_df['Date'] = pd.to_datetime(single_df['Date']).dt.strftime('%Y-%m-%d')
+                                st.write(
+                                    f"調試：{ticker} 單獨下載成功，數據行數 {len(single_df)}，日期範圍 {single_df['Date'].min()} 至 {single_df['Date'].max()}")
                                 records = single_df.to_records(index=False)
                                 cursor.executemany('''INSERT OR IGNORE INTO stocks 
                                     (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
@@ -217,10 +217,13 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                                                      float(r.Close) if pd.notna(r.Close) else None,
                                                      float(r.Close) if pd.notna(r.Close) else None,
                                                      int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
+                                st.write(f"調試：{ticker} 插入 {len(single_df)} 條記錄")
                             else:
                                 st.error(f"單獨下載 {ticker} 仍失敗")
                     else:
                         df = data.reset_index()
+                        st.write(
+                            f"調試：批次 {batch_tickers} 下載成功，數據行數 {len(df)}，日期範圍 {df['Date'].min()} 至 {df['Date'].max()}")
                         if isinstance(df.columns, pd.MultiIndex):
                             df.columns = [col[0] if col[1] == '' else f"{col[0]}_{col[1]}" for col in df.columns]
 
@@ -235,6 +238,8 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
 
                             ticker_df['Ticker'] = ticker
                             ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
+                            st.write(
+                                f"調試：{ticker} 處理後數據行數 {len(ticker_df)}，日期範圍 {ticker_df['Date'].min()} 至 {ticker_df['Date'].max()}")
                             records = ticker_df.to_records(index=False)
                             cursor.executemany('''INSERT OR IGNORE INTO stocks 
                                 (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
@@ -245,6 +250,7 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                                                  float(r.Close) if pd.notna(r.Close) else None,
                                                  float(r.Close) if pd.notna(r.Close) else None,
                                                  int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
+                            st.write(f"調試：{ticker} 插入 {len(ticker_df)} 條記錄")
 
                 conn.commit()
                 elapsed = time.time() - start_time
