@@ -53,7 +53,14 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         
         # 提取數據並統一索引
         logger.info(f"提取 {ticker} 的收盤價、成交量、高價、低價")
-        stock.index = pd.to_datetime(stock.index).tz_localize('US/Eastern', ambiguous='NaT', nonexistent='NaT')
+        # 檢查索引是否已帶時區，根據數據來源處理
+        stock.index = pd.to_datetime(stock.index)
+        if stock.index.tz is None:
+            stock.index = stock.index.tz_localize('US/Eastern', ambiguous='NaT', nonexistent='NaT')
+        else:
+            stock.index = stock.index.tz_convert('US/Eastern')
+        logger.info(f"{ticker} 索引時區狀態: {'已帶時區' if stock.index.tz else '無時區'}")
+        
         dates = stock.index.dropna()
         close = pd.Series(stock['Close']).dropna()
         volume = pd.Series(stock['Volume']).dropna()
