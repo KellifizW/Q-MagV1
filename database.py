@@ -3,6 +3,7 @@ import os
 import sqlite3
 import pandas as pd
 import yfinance as yf
+yf.set_tz_cache_location("./yfinance_cache")  # 添加自定義緩存路徑
 from datetime import datetime, timedelta
 import streamlit as st
 import logging
@@ -100,9 +101,11 @@ def init_database(repo_manager):
                     repo_manager.track_lfs(DB_PATH)
             
             diagnostics = diagnose_db_file(DB_PATH)
-            st.write("檔案診斷資訊：")
-            for line in diagnostics:
-                st.write(line)
+            st.write("資料庫診斷資訊：")
+            if diagnostics:
+                file_size_mb = os.path.getsize(DB_PATH) / (1024 * 1024)  # 轉換為 MB
+                st.write(f"檢查檔案：{DB_PATH}")
+                st.write(f"檔案大小：{file_size_mb:.2f} MB")
             with sqlite3.connect(DB_PATH) as conn:
                 conn.execute("SELECT 1 FROM sqlite_master LIMIT 1")
             st.session_state['db_initialized'] = True
@@ -132,8 +135,11 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
     token = st.secrets.get("TOKEN", "")
     check_and_fetch_lfs_file(db_path, REPO_URL, token)
     diagnostics = diagnose_db_file(db_path)
-    for line in diagnostics:
-        st.write(line)
+    st.write("資料庫診斷資訊：")
+    if diagnostics:
+        file_size_mb = os.path.getsize(DB_PATH) / (1024 * 1024)  # 轉換為 MB
+        st.write(f"檢查檔案：{DB_PATH}")
+        st.write(f"檔案大小：{file_size_mb:.2f} MB")
 
     try:
         with sqlite3.connect(db_path) as conn:
@@ -295,8 +301,11 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
         return None, tickers
     
     diagnostics = diagnose_db_file(db_path)
-    for line in diagnostics:
-        st.write(line)
+    st.write("資料庫診斷資訊：")
+    if diagnostics:
+        file_size_mb = os.path.getsize(DB_PATH) / (1024 * 1024)  # 轉換為 MB
+        st.write(f"檢查檔案：{DB_PATH}")
+        st.write(f"檔案大小：{file_size_mb:.2f} MB")
     
     try:
         with sqlite3.connect(db_path) as conn:
