@@ -20,15 +20,24 @@ REPO_URL = "https://github.com/KellifizW/Q-MagV1.git"
 
 st.title("Qullamaggie Breakout Screener")
 
+# 增加主界面寬度 30%
+st.markdown("""
+    <style>
+    .main .block-container {
+        max-width: 130%;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 st.markdown("""
 ### 簡介
 本程式基於 Qullamaggie Breakout 策略篩選股票，參考方法來自 [Reddit: Trade Like a Professional - Breakout Swing Trading](https://www.reddit.com/r/wallstreetbetsOGs/comments/om7h73/trade_like_a_professional_breakout_swing_trading/)。
 
 #### 程式最終目的：
 1. **偵測 Qullamaggie Breakout 特徵**：檢查最近 30 日內是否有股票符合 Qullamaggie 描述的 Breakout 特徵：
-   - 前段顯著漲幅（22 日內漲幅 > 22 日內最小漲幅，67 日內漲幅 > 67 日內最小漲幅, 126 日內漲幅 > 126 日內最小漲幅）。
-   - 隨後進入低波動盤整（盤整範圍 < 最大盤整範圍），成交量下降。
-   - 價格突破盤整區間高點，且成交量放大（> 過去 10 天均量的 1.5 倍）。
+   - **顯著的前段漲幅**：股票在過去某段時間內展現強勁上漲（例如 22 日內漲幅 > 22 日內最小漲幅，67 日內漲幅 > 67 日內最小漲幅，126 日內漲幅 > 126 日內最小漲幅）。
+   - **低波動盤整期**：隨後進入低波動盤整階段，價格波動範圍縮小（盤整範圍 < 最大盤整範圍），成交量顯著下降。
+   - **突破關鍵阻力**：價格突破盤整區間高點，伴隨成交量顯著放大（> 過去 10 天均量的 1.5 倍）。
 2. **識別買入時機並標記信號**：如果股票已到達買入時機（突破當天），在圖表上標記買入信號。
 
 #### 篩選結果說明：
@@ -67,7 +76,7 @@ def init_database():
 init_database()
 
 # 提供檢查比例選擇
-check_percentage = st.slider("檢查和更新比例 (%)", 0, 100, 10, help="選擇要檢查和更新的股票比例（從末尾開始）") / 100.0
+check_percentage = st.slider("檢查和更新比例 (%)", 0, 100, 10, help="選擇要檢查和更新的股票比例（從末尾開始") / 100.0
 
 # 更新和初始化按鈕
 if st.button("初始化並更新資料庫", key="init_and_update"):
@@ -115,7 +124,7 @@ with st.sidebar.form(key="screening_form"):
     min_rise_126 = st.slider("126 日內最小漲幅 (%)", 0, 300, 80)
     max_range = st.slider("最大盤整範圍 (%)", 3, 15, 10)
     min_adr = st.slider("最小 ADR (%)", 0, 10, 2)
-    max_stocks = st.slider("最大篩選股票數量(測試用)", 10, 1000, 50)
+    max_stock_percentage = st.slider("篩選股票比例 (%)", 10, 100, 50, help="選擇要篩選的股票池比例（10%-100%）") / 100.0
     submit_button = st.form_submit_button("運行篩選")
 
 # 重置按鈕
@@ -185,7 +194,10 @@ if submit_button:
     elif index_option == "S&P 500":
         tickers = get_sp500()
     else:
-        tickers = get_nasdaq_all(csv_tickers)[:max_stocks]
+        tickers = get_nasdaq_all(csv_tickers)
+    total_tickers = len(tickers)
+    max_stocks = int(total_tickers * max_stock_percentage)  # 根據百分比計算最大股票數
+    tickers = tickers[:max_stocks]  # 限制篩選範圍
     st.session_state['tickers'] = tickers
 
     if not os.path.exists(DB_PATH):
@@ -221,7 +233,7 @@ if submit_button:
 if 'df' in st.session_state:
     df = st.session_state['df']
     st.subheader("篩選結果")
-    df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+    df,'Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
     latest_date = df['Date'].max()
     latest_df = df[df['Date'] == latest_date].copy()
     latest_df['Status'] = latest_df.apply(
