@@ -28,7 +28,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     results = []
     matched_tickers = set()  # 用於記錄最新日期符合條件的股票
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
-    current_date = np.datetime64(pd.Timestamp.now(tz='US/Eastern').normalize())
+    current_date = pd.Timestamp.now(tz='US/Eastern').normalize()  # 使用 pd.Timestamp 並確保帶時區
     
     for ticker in tickers:
         if isinstance(data.columns, pd.MultiIndex):
@@ -45,7 +45,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         volume = pd.Series(stock['Volume']).dropna()
         high = pd.Series(stock['High']).dropna()
         low = pd.Series(stock['Low']).dropna()
-        dates = pd.to_datetime(stock.index)  # Ensure dates is a datetime index
+        dates = pd.to_datetime(stock.index).tz_localize('US/Eastern')  # 確保日期帶有時區
         
         if len(close) < required_days:
             continue
