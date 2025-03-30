@@ -30,6 +30,13 @@ def get_last_trading_day(current_date):
         current_date -= timedelta(days=1)
     return current_date
 
+def get_next_trading_day(date):
+    """計算下一個交易日（排除周末）"""
+    next_day = date + timedelta(days=1)
+    while next_day.weekday() >= 5:  # 星期六=5，星期日=6
+        next_day += timedelta(days=1)
+    return next_day
+
 def download_with_retry(tickers, start, end, retries=2, delay=60):
     """使用 yfinance 下載數據，失敗後重試"""
     for attempt in range(retries):
@@ -52,7 +59,7 @@ def fetch_yfinance_data(ticker, trading_days=136):
     try:
         end_date = get_last_trading_day(datetime.now(US_EASTERN))
         start_date = (end_date - timedelta(days=trading_days * 1.5)).strftime('%Y-%m-%d')
-        end_date = end_date.strftime('%Y-%m-%d')
+        end_date = get_next_trading_day(end_date).strftime('%Y-%m-%d')  # 確保包含最後交易日
         data = yf.download(ticker, start=start_date, end=end_date, progress=False)
         if data.empty:
             logger.warning(f"無法從 yfinance 獲取 {ticker} 的數據")
@@ -148,7 +155,8 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             actual_current_date = datetime.now(US_EASTERN).date()
             if actual_current_date < end_date:
                 end_date = get_last_trading_day(actual_current_date)
-            st.write(f"調試：當前日期 {current_date.date()}，最後交易日 {end_date}")
+            end_date_for_download = get_next_trading_day(end_date)  # 確保包含最後交易日
+            st.write(f"調試：當前日期 {current_date.date()}，最後交易日 {end_date}，下載截止日期 {end_date_for_download}")
 
             ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
             ticker_dates['last_date'] = pd.to_datetime(ticker_dates['last_date'], errors='coerce').dt.date
@@ -193,14 +201,14 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 start_date = min(batch_start_dates)
                 if start_date >= end_date:
                     start_date = end_date - timedelta(days=1)
-                st.write(f"調試：批次 {batch_tickers}，下載範圍 {start_date} 至 {end_date}")
-                data = download_with_retry(batch_tickers, start=start_date, end=end_date)
+                st.write(f"調試：批次 {batch_tickers}，下載範圍 {start_date} 至 {end_date_for_download}")
+                data = download_with_retry(batch_tickers, start=start_date, end=end_date_for_download)
 
                 if data is not None:
                     if data.empty:
                         st.warning(f"批次 {batch_tickers} 返回空數據，嘗試單獨下載")
                         for ticker in batch_tickers:
-                            single_data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+                            single_data = yf.download(ticker, start=start_date, end=end_date_for_download, progress=False)
                             if not single_data.empty:
                                 single_df = single_data.reset_index()
                                 single_df['Ticker'] = ticker
