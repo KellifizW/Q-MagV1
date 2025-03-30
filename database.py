@@ -31,7 +31,7 @@ def download_with_retry(tickers, start, end, retries=2, delay=60):
             if data.empty:
                 logger.warning(f"批次數據為空，股票：{tickers}")
                 return None
-            logger.info(f"成功下載 {len(tickers)} 檔股票數據")
+            logger.info(f"成功下載股票數據：{tickers}")
             return data
         except Exception as e:
             logger.warning(f"yfinance 下載失敗，股票：{tickers}，錯誤：{str(e)}，重試 {attempt + 1}/{retries}")
@@ -119,27 +119,32 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             end_date = current_date - timedelta(days=1)
 
             ticker_dates = pd.read_sql_query("SELECT Ticker, MAX(Date) as last_date FROM stocks GROUP BY Ticker", conn)
-            ticker_dates['last_date'] = pd.to_datetime(ticker_dates['last_date'], errors='coerce').dt.strftime('%Y-%m-%d')
-            existing_tickers = dict(zip(ticker_dates['Ticker'], pd.to_datetime(ticker_dates['last_date']).dt.date))
+            ticker_dates['last_date'] = pd.to_datetime(ticker_dates['last_date'], errors='coerce').dt.date
+            existing_tickers = dict(zip(ticker_dates['Ticker'], ticker_dates['last_date']))
 
             num_to_check = max(1, int(len(tickers) * check_percentage))
             tickers_to_check = tickers[-num_to_check:]
             tickers_to_update = []
+            ticker_start_dates = {}
             default_start_date = end_date - timedelta(days=210)
-            
-            # 檢查更新需求
             required_start_date = end_date - timedelta(days=210 + lookback_days)
+
+            # 檢查需要更新的股票
             for ticker in tickers_to_check:
                 last_date = existing_tickers.get(ticker)
-                if not last_date or (end_date - last_date).days > 0:
+                if not last_date or last_date < required_start_date:
                     tickers_to_update.append(ticker)
+                    ticker_start_dates[ticker] = last_date + timedelta(days=1) if last_date else default_start_date
 
             if not tickers_to_update and last_updated and pd.to_datetime(last_updated[0]).date() >= end_date and len(existing_tickers) >= len(tickers):
                 st.write("資料庫已是最新且完整，無需更新")
                 return True
 
             if len(existing_tickers) < len(tickers):
-                tickers_to_update = [t for t in tickers if t not in existing_tickers]
+                for ticker in tickers:
+                    if ticker not in existing_tickers:
+                        tickers_to_update.append(ticker)
+                        ticker_start_dates[ticker] = default_start_date
 
             logger.info(f"需更新的股票數量：{len(tickers_to_update)}")
             total_batches = (len(tickers_to_update) + batch_size - 1) // batch_size
@@ -147,36 +152,36 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
             status_text = st.empty()
             start_time = time.time()
 
+            # 批次下載與處理
             for i in range(0, len(tickers_to_update), batch_size):
                 batch_tickers = tickers_to_update[i:i + batch_size]
-                for ticker in batch_tickers:
-                    last_date = existing_tickers.get(ticker, default_start_date)
-                    start_date = last_date + timedelta(days=1) if last_date else default_start_date
-                    data = download_with_retry([ticker], start=start_date, end=end_date)
-                    if data is not None:
-                        df = data.reset_index()  # 將 Date 從索引轉為列
-                        if isinstance(df.columns, pd.MultiIndex):
-                            df.columns = [col[0] if col[1] == '' else f"{col[0]}_{col[1]}" for col in df.columns]
-                            
+                batch_start_dates = [ticker_start_dates[ticker] for ticker in batch_tickers]
+                start_date = min(batch_start_dates)  # 取批次中最舊的日期
+                data = download_with_retry(batch_tickers, start=start_date, end=end_date)
+                
+                if data is not None:
+                    df = data.reset_index()
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = [col[0] if col[1] == '' else f"{col[0]}_{col[1]}" for col in df.columns]
+                    
+                    for ticker in batch_tickers:
                         ticker_df = df[[col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
                         ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
-                        
                         expected_columns = {'Date', 'Open', 'High', 'Low', 'Close', 'Volume'}
-                        if not expected_columns.issubset(ticker_df.columns): 
+                        if not expected_columns.issubset(ticker_df.columns):
                             st.error(f"錯誤：ticker_df 缺少必要列，當前列名：{ticker_df.columns.tolist()}")
-                            continue 
-                            
+                            continue
+                        
                         ticker_df['Ticker'] = ticker
                         ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
-                
                         records = ticker_df.to_records(index=False)
                         cursor.executemany('''INSERT OR IGNORE INTO stocks 
                             (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
                             [(r.Date, r.Ticker, float(r.Open) if pd.notna(r.Open) else None, 
-                                float(r.High) if pd.notna(r.High) else None, float(r.Low) if pd.notna(r.Low) else None, 
-                                float(r.Close) if pd.notna(r.Close) else None, float(r.Close) if pd.notna(r.Close) else None, 
-                                int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
+                              float(r.High) if pd.notna(r.High) else None, float(r.Low) if pd.notna(r.Low) else None, 
+                              float(r.Close) if pd.notna(r.Close) else None, float(r.Close) if pd.notna(r.Close) else None, 
+                              int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
 
                 conn.commit()
                 elapsed = time.time() - start_time
@@ -197,11 +202,11 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                 st.success("資料庫更新完成並成功推送至 GitHub")
             else:
                 st.warning("資料庫更新完成，但推送至 GitHub 失敗，詳情請查看日誌")
-            if st.button("手動推送至 GitHub"):
-                if repo_manager.push(DB_PATH, "Manual push after update"):
-                    st.success("手動推送成功")
-                else:
-                    st.error("手動推送失敗，請檢查網絡或認證設置")
+                if st.button("手動推送至 GitHub"):
+                    if repo_manager.push(DB_PATH, "Manual push after update"):
+                        st.success("手動推送成功")
+                    else:
+                        st.error("手動推送失敗，請檢查網絡或認證設置")
 
             if os.path.exists(DB_PATH):
                 with open(DB_PATH, "rb") as file:
@@ -251,4 +256,4 @@ def fetch_stock_data(tickers, db_path=DB_PATH, trading_days=70):
 if __name__ == "__main__":
     repo_manager = GitRepoManager(REPO_DIR, REPO_URL, st.secrets.get("TOKEN", ""))
     init_database(repo_manager)
-    update_database(repo=repo_manager)
+    update_database(repo_manager=repo_manager)  # 修正參數名稱
