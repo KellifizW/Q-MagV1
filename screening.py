@@ -27,7 +27,8 @@ def get_nasdaq_all(csv_tickers):
     """直接使用 csv_tickers，不擴展"""
     return csv_tickers
 
-def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, max_range=5, min_adr=5, show_all=False):
+def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, 
+                        max_range=5, min_adr=5, use_candle_strength=True, show_all=False):
     results = []
     failed_stocks = {}
     matched_count = 0
@@ -88,16 +89,20 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             breakout = (close > recent_high.shift(1)) & (close.shift(1) <= recent_high.shift(1))
             breakout_volume = volume > volume.rolling(10).mean() * 1.5
             
-            # 新增：K線強度計算
-            candle_strength = (close - low) / (high - low) > 0.7  # 收盤價需在高低區間的上30%
+            # K線強度計算（可選）
+            candle_strength = (close - low) / (high - low) > 0.7 if use_candle_strength else pd.Series(True, index=close.index)
             
-            # 新增：風險管理計算
+            # 風險管理計算
             stop_loss = recent_low  # 盤整區間最低點作為止損
             breakout_price = close[breakout & breakout_volume & candle_strength]
             if not breakout_price.empty:
-                targets = breakout_price * pd.Series([1.2, 1.5, 2.0], index=breakout_price.index)  # 20%、50%、100%目標
+                targets = pd.DataFrame({
+                    '20%': breakout_price * 1.2,
+                    '50%': breakout_price * 1.5,
+                    '100%': breakout_price * 2.0
+                }, index=breakout_price.index)
             else:
-                targets = pd.DataFrame(index=close.index, columns=['20%', '50%', '100%'])  # 空數據
+                targets = pd.DataFrame(index=close.index, columns=['20%', '50%', '100%'])
             
             # 更新篩選條件
             mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & (rise_126 >= min_rise_126) & \
@@ -126,6 +131,8 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             
             if mask.any():
                 matched_count += 1
+                # 確保 targets 與 mask 索引一致
+                targets_filtered = targets.loc[mask[mask].index] if not targets.empty and mask.any() else pd.DataFrame(index=mask[mask].index, columns=['20%', '50%', '100%'])
                 matched = pd.DataFrame({
                     'Ticker': ticker,
                     'Date': dates[mask],
@@ -139,9 +146,9 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                     'Breakout_Volume': breakout_volume[mask],
                     'Candle_Strength': candle_strength[mask],
                     'Stop_Loss': stop_loss[mask],
-                    'Target_20%': targets['20%'][mask] if not targets.empty else pd.Series([None] * mask.sum()),
-                    'Target_50%': targets['50%'][mask] if not targets.empty else pd.Series([None] * mask.sum()),
-                    'Target_100%': targets['100%'][mask] if not targets.empty else pd.Series([None] * mask.sum())
+                    'Target_20%': targets_filtered['20%'] if not targets_filtered.empty else pd.Series([None] * mask.sum()),
+                    'Target_50%': targets_filtered['50%'] if not targets_filtered.empty else pd.Series([None] * mask.sum()),
+                    'Target_100%': targets_filtered['100%'] if not targets_filtered.empty else pd.Series([None] * mask.sum())
                 })
                 if not show_all:
                     results.append(matched)
@@ -174,7 +181,8 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     else:
         return pd.DataFrame()
 
-def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, max_range=5, min_adr=5, progress_bar=None):
+def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, 
+                  max_range=5, min_adr=5, use_candle_strength=True, progress_bar=None):
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
     data, all_tickers = fetch_stock_data(tickers, trading_days=required_days)
     if data is None:
@@ -190,7 +198,8 @@ def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_2
     
     st.write(f"篩選股票池：{stock_pool}，共 {len(tickers)} 隻股票")
     
-    results = analyze_stock_batch(data, tickers, prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, max_range, min_adr, show_all=False)
+    results = analyze_stock_batch(data, tickers, prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, 
+                                  max_range, min_adr, use_candle_strength, show_all=False)
     
     if progress_bar:
         progress_bar.progress(1.0)
@@ -198,10 +207,12 @@ def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_2
     st.session_state['stock_data'] = data
     return results
 
-def screen_single_stock(ticker, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, max_range=5, min_adr=5):
+def screen_single_stock(ticker, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, 
+                        max_range=5, min_adr=5, use_candle_strength=True):
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
     data = fetch_yfinance_data(ticker, trading_days=required_days)
     if data is None:
         st.error(f"無法獲取 {ticker} 的數據")
         return pd.DataFrame()
-    return analyze_stock_batch(data, [ticker], prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, max_range, min_adr, show_all=True)
+    return analyze_stock_batch(data, [ticker], prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, 
+                               max_range, min_adr, use_candle_strength, show_all=True)
