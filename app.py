@@ -233,7 +233,7 @@ if submit_button:
 if 'df' in st.session_state:
     df = st.session_state['df']
     st.subheader("篩選結果")
-    df,['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+    df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
     latest_date = df['Date'].max()
     latest_df = df[df['Date'] == latest_date].copy()
     latest_df['Status'] = latest_df.apply(
