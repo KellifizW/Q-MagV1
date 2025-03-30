@@ -49,10 +49,24 @@ def fetch_yfinance_data(ticker, trading_days=136):
         if data.empty:
             logger.warning(f"無法從 yfinance 獲取 {ticker} 的數據")
             return None
+        # 重命名欄位以匹配資料庫結構
+        data = data.rename(columns={
+            'Open': 'Open',
+            'High': 'High',
+            'Low': 'Low',
+            'Close': 'Close',
+            'Volume': 'Volume'
+        })
         data['Ticker'] = ticker
-        data.reset_index(inplace=True)
-        pivoted_data = data.pivot(columns='Ticker')
-        return pivoted_data
+        data = data.reset_index()
+        # 創建與 fetch_stock_data 一致的多層索引結構
+        data_pivoted = data.pivot(columns='Ticker')
+        # 確保欄位名稱正確
+        data_pivoted.columns = pd.MultiIndex.from_tuples(
+            [(col[0], col[1]) for col in data_pivoted.columns],
+            names=[None, 'Ticker']
+        )
+        return data_pivoted
     except Exception as e:
         logger.error(f"查詢 {ticker} 數據失敗：{str(e)}")
         return None
