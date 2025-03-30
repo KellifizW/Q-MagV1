@@ -154,19 +154,29 @@ def update_database(tickers_file=TICKERS_CSV, db_path=DB_PATH, batch_size=BATCH_
                     start_date = last_date + timedelta(days=1) if last_date else default_start_date
                     data = download_with_retry([ticker], start=start_date, end=end_date)
                     if data is not None:
-                        # 處理數據並插入資料庫
-                        df = data.reset_index()
-                        ticker_df = df.copy()
+                        df = data.reset_index()  # 將 Date 從索引轉為列
+                        if isinstance(df.columns, pd.MultiIndex):
+                            df.columns = [col[0] if col[1] == '' else f"{col[0]}_{col[1]}" for col in df.columns]
+                            
+                        ticker_df = df[[col for col in df.columns if col.startswith(f"{ticker}_") or col == 'Date']].copy()
+                        ticker_df.columns = [col.replace(f"{ticker}_", "") for col in ticker_df.columns]
+                        
+                        expected_columns = {'Date', 'Open', 'High', 'Low', 'Close', 'Volume'}
+                        if not expected_columns.issubset(ticker_df.columns): 
+                            st.error(f"錯誤：ticker_df 缺少必要列，當前列名：{ticker_df.columns.tolist()}")
+                            continue 
+                            
                         ticker_df['Ticker'] = ticker
                         ticker_df['Date'] = pd.to_datetime(ticker_df['Date']).dt.strftime('%Y-%m-%d')
+                
                         records = ticker_df.to_records(index=False)
                         cursor.executemany('''INSERT OR IGNORE INTO stocks 
                             (Date, Ticker, Open, High, Low, Close, Adj_Close, Volume)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
                             [(r.Date, r.Ticker, float(r.Open) if pd.notna(r.Open) else None, 
-                              float(r.High) if pd.notna(r.High) else None, float(r.Low) if pd.notna(r.Low) else None, 
-                              float(r.Close) if pd.notna(r.Close) else None, float(r.Close) if pd.notna(r.Close) else None, 
-                              int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
+                                float(r.High) if pd.notna(r.High) else None, float(r.Low) if pd.notna(r.Low) else None, 
+                                float(r.Close) if pd.notna(r.Close) else None, float(r.Close) if pd.notna(r.Close) else None, 
+                                int(r.Volume) if pd.notna(r.Volume) else 0) for r in records])
 
                 conn.commit()
                 elapsed = time.time() - start_time
