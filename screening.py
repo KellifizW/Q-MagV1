@@ -43,7 +43,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                 stock = data.xs(ticker, level='Ticker', axis=1)
             else:
                 stock = data[[col for col in data.columns if ticker in col]].copy()
-                stock.columns = [col[0] for col in stock.columns]  # 移除多層索引中的 Ticker 層
+                stock.columns = [col[0] for col in stock.columns]
             
             if not isinstance(stock, pd.DataFrame):
                 failed_stocks[ticker] = f"stock 不是 DataFrame，類型為 {type(stock)}"
@@ -63,6 +63,7 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             else:
                 sufficient_data_tickers.append(ticker)
             
+            # 漲幅計算
             close_shift_22 = close.shift(22)
             close_shift_67 = close.shift(67)
             close_shift_126 = close.shift(126)
@@ -70,22 +71,14 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             rise_67 = (close / close_shift_67 - 1) * 100
             rise_126 = (close / close_shift_126 - 1) * 100
             
-            if rise_126.isna().all():
+            if rise_126.isna().all() or rise_67.isna().all() or rise_22.isna().all():
                 insufficient_data_tickers.append(ticker)
-                sufficient_data_tickers.remove(ticker)
-                failed_stocks[ticker] = f"無法計算 126 日漲幅，數據長度 {len(close)}，有效 126 日前數據點 {close_shift_126.notna().sum()}"
-                continue
-            if rise_67.isna().all():
-                insufficient_data_tickers.append(ticker)
-                sufficient_data_tickers.remove(ticker)
-                failed_stocks[ticker] = f"無法計算 67 日漲幅，數據長度 {len(close)}，有效 67 日前數據點 {close_shift_67.notna().sum()}"
-                continue
-            if rise_22.isna().all():
-                insufficient_data_tickers.append(ticker)
-                sufficient_data_tickers.remove(ticker)
-                failed_stocks[ticker] = f"無法計算 22 日漲幅，數據長度 {len(close)}，有效 22 日前數據點 {close_shift_22.notna().sum()}"
+                if ticker in sufficient_data_tickers:
+                    sufficient_data_tickers.remove(ticker)
+                failed_stocks[ticker] = f"無法計算漲幅，數據長度 {len(close)}"
                 continue
             
+            # 盤整與突破計算
             recent_high = close.rolling(consol_days).max()
             recent_low = close.rolling(consol_days).min()
             consolidation_range = (recent_high / recent_low - 1) * 100
@@ -95,10 +88,22 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             breakout = (close > recent_high.shift(1)) & (close.shift(1) <= recent_high.shift(1))
             breakout_volume = volume > volume.rolling(10).mean() * 1.5
             
-            mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & (rise_126 >= min_rise_126) & \
-                   (consolidation_range <= max_range) & (adr >= min_adr)
+            # 新增：K線強度計算
+            candle_strength = (close - low) / (high - low) > 0.7  # 收盤價需在高低區間的上30%
             
-            # 如果 show_all=True，記錄最新一天數據（用於即時查詢）
+            # 新增：風險管理計算
+            stop_loss = recent_low  # 盤整區間最低點作為止損
+            breakout_price = close[breakout & breakout_volume & candle_strength]
+            if not breakout_price.empty:
+                targets = breakout_price * pd.Series([1.2, 1.5, 2.0], index=breakout_price.index)  # 20%、50%、100%目標
+            else:
+                targets = pd.DataFrame(index=close.index, columns=['20%', '50%', '100%'])  # 空數據
+            
+            # 更新篩選條件
+            mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & (rise_126 >= min_rise_126) & \
+                   (consolidation_range <= max_range) & (adr >= min_adr) & \
+                   (breakout & breakout_volume & candle_strength if show_all else True)
+            
             if show_all:
                 latest_data = pd.DataFrame({
                     'Ticker': ticker,
@@ -110,11 +115,15 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                     'Consolidation_Range_%': consolidation_range[-1:],
                     'ADR_%': adr[-1:],
                     'Breakout': breakout[-1:],
-                    'Breakout_Volume': breakout_volume[-1:]
+                    'Breakout_Volume': breakout_volume[-1:],
+                    'Candle_Strength': candle_strength[-1:],
+                    'Stop_Loss': stop_loss[-1:],
+                    'Target_20%': targets['20%'][-1:] if not targets.empty else pd.Series([None]),
+                    'Target_50%': targets['50%'][-1:] if not targets.empty else pd.Series([None]),
+                    'Target_100%': targets['100%'][-1:] if not targets.empty else pd.Series([None])
                 })
                 results.append(latest_data)
             
-            # 如果股票符合條件，記錄所有符合的數據點
             if mask.any():
                 matched_count += 1
                 matched = pd.DataFrame({
@@ -127,9 +136,13 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                     'Consolidation_Range_%': consolidation_range[mask],
                     'ADR_%': adr[mask],
                     'Breakout': breakout[mask],
-                    'Breakout_Volume': breakout_volume[mask]
+                    'Breakout_Volume': breakout_volume[mask],
+                    'Candle_Strength': candle_strength[mask],
+                    'Stop_Loss': stop_loss[mask],
+                    'Target_20%': targets['20%'][mask] if not targets.empty else pd.Series([None] * mask.sum()),
+                    'Target_50%': targets['50%'][mask] if not targets.empty else pd.Series([None] * mask.sum()),
+                    'Target_100%': targets['100%'][mask] if not targets.empty else pd.Series([None] * mask.sum())
                 })
-                # 如果不是 show_all 模式，只記錄符合條件的數據
                 if not show_all:
                     results.append(matched)
                 st.write(f"股票 {ticker} 符合條件（最新）：22 日漲幅 = {rise_22.iloc[-1]:.2f}%, "
@@ -142,7 +155,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             failed_stocks[ticker] = f"分析失敗：{str(e)}"
             st.write(f"{ticker} 分析失敗：{str(e)}")
     
-    # 顯示數據點分類結果
     if sufficient_data_tickers:
         st.write(f"有足夠數據點之股票：{', '.join(sufficient_data_tickers)}")
     if insufficient_data_tickers:
@@ -153,8 +165,8 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
     
     total_analyzed = matched_count + unmatched_count + len(failed_stocks)
     st.write(f"\n分析統計：共分析 {total_analyzed} 隻股票，"
-             f"符合條件 {matched_count} 隻(The number of matched tickers)，不符合條件 {unmatched_count} 隻，"
-             f"無法分析 {len(failed_stocks)} 隻(The number of tickers failed to analyze)")
+             f"符合條件 {matched_count} 隻，符合條件 {unmatched_count} 隻，"
+             f"無法分析 {len(failed_stocks)} 隻")
     
     if results:
         combined_results = pd.concat(results)
@@ -163,7 +175,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         return pd.DataFrame()
 
 def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, max_range=5, min_adr=5, progress_bar=None):
-    """主篩選函數，從 SQLite 查詢數據"""
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
     data, all_tickers = fetch_stock_data(tickers, trading_days=required_days)
     if data is None:
@@ -188,7 +199,6 @@ def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_2
     return results
 
 def screen_single_stock(ticker, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, max_range=5, min_adr=5):
-    """篩選單一股票，使用 yfinance 數據"""
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
     data = fetch_yfinance_data(ticker, trading_days=required_days)
     if data is None:
