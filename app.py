@@ -213,7 +213,8 @@ if submit_button:
                 st.warning("無符合條件的股票，請調整參數")
             else:
                 st.session_state['df'] = df
-                st.success(f"找到 {len(df)} 筆符合條件的記錄（{len(df['Ticker'].unique())} 隻股票）")
+                # 移除這一行
+                # st.success(f"找到 {len(df)} 筆符合條件的記錄（{len(df['Ticker'].unique())} 隻股票）")
 
 if 'df' in st.session_state:
     df = st.session_state['df']
