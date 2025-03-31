@@ -103,42 +103,102 @@ if st.button("更新資料庫", key="update_db"):
         st.error("Git 倉庫未初始化，請先點擊「初始化並更新資料庫」")
 
 # 初始化篩選參數的狀態
-if 'use_volume_filter' not in st.session_state:
-    st.session_state['use_volume_filter'] = False
-if 'use_intraday_rise' not in st.session_state:
-    st.session_state['use_intraday_rise'] = False
+if 'screening_params' not in st.session_state:
+    st.session_state['screening_params'] = {
+        'index_option': "NASDAQ 100",
+        'prior_days': 20,
+        'consol_days': 10,
+        'min_rise_22': 10,
+        'min_rise_67': 40,
+        'min_rise_126': 80,
+        'max_range': 10,
+        'min_adr': 2,
+        'use_candle_strength': True,
+        'use_volume_filter': False,
+        'min_volume': 1000,
+        'use_intraday_rise': False,
+        'min_intraday_rise': 10,
+        'max_stock_percentage': 50.0
+    }
 
-with st.sidebar.form(key="screening_form"):
-    st.header("篩選參數")
-    index_option = st.selectbox("選擇股票池", ["NASDAQ 100", "S&P 500", "NASDAQ All"])
-    prior_days = st.slider("前段上升天數", 10, 30, 20)
-    consol_days = st.slider("盤整天數", 5, 15, 10)
-    min_rise_22 = st.slider("22 日內最小漲幅 (%)", 0, 50, 10)
-    min_rise_67 = st.slider("67 日內最小漲幅 (%)", 0, 100, 40)
-    min_rise_126 = st.slider("126 日內最小漲幅 (%)", 0, 300, 80)
-    max_range = st.slider("最大盤整範圍 (%)", 3, 15, 10)
-    min_adr = st.slider("最小 ADR (%)", 0, 10, 2)
-    use_candle_strength = st.checkbox("啟用K線強度篩選", value=True, help="勾選以要求突破K線收盤價靠近高點 (>70%)")
-    
-    # 成交量篩選
-    use_volume_filter = st.checkbox("啟用成交量篩選", value=st.session_state['use_volume_filter'], key="use_volume_filter_checkbox")
-    st.session_state['use_volume_filter'] = use_volume_filter
-    min_volume = st.slider("最近10日最小成交量（萬股）", 1000, 9000, 1000, disabled=not st.session_state['use_volume_filter'])
-    
-    # 日內價格上漲篩選
-    use_intraday_rise = st.checkbox("啟用最近5日內日內上漲篩選", value=st.session_state['use_intraday_rise'], key="use_intraday_rise_checkbox")
-    st.session_state['use_intraday_rise'] = use_intraday_rise
-    min_intraday_rise = st.slider("日內最小上漲幅度 (%)", 10, 100, 10, disabled=not st.session_state['use_intraday_rise'])
-    
-    max_stock_percentage = st.slider("篩選股票比例 (%)", 10, 100, 50) / 100.0
-    submit_button = st.form_submit_button("運行篩選")
+# 篩選參數（移出 st.form，直接使用 st.sidebar）
+st.sidebar.header("篩選參數")
+index_option = st.sidebar.selectbox("選擇股票池", ["NASDAQ 100", "S&P 500", "NASDAQ All"], 
+                                    index=["NASDAQ 100", "S&P 500", "NASDAQ All"].index(st.session_state['screening_params']['index_option']))
+prior_days = st.sidebar.slider("前段上升天數", 10, 30, st.session_state['screening_params']['prior_days'])
+consol_days = st.sidebar.slider("盤整天數", 5, 15, st.session_state['screening_params']['consol_days'])
+min_rise_22 = st.sidebar.slider("22 日內最小漲幅 (%)", 0, 50, st.session_state['screening_params']['min_rise_22'])
+min_rise_67 = st.sidebar.slider("67 日內最小漲幅 (%)", 0, 100, st.session_state['screening_params']['min_rise_67'])
+min_rise_126 = st.sidebar.slider("126 日內最小漲幅 (%)", 0, 300, st.session_state['screening_params']['min_rise_126'])
+max_range = st.sidebar.slider("最大盤整範圍 (%)", 3, 15, st.session_state['screening_params']['max_range'])
+min_adr = st.sidebar.slider("最小 ADR (%)", 0, 10, st.session_state['screening_params']['min_adr'])
+use_candle_strength = st.sidebar.checkbox("啟用K線強度篩選", value=st.session_state['screening_params']['use_candle_strength'], 
+                                          help="勾選以要求突破K線收盤價靠近高點 (>70%)")
 
+# 成交量篩選
+use_volume_filter = st.sidebar.checkbox("啟用成交量篩選", value=st.session_state['screening_params']['use_volume_filter'], 
+                                        key="use_volume_filter_checkbox")
+min_volume = st.sidebar.slider("最近10日最小成交量（萬股）", 1000, 9000, st.session_state['screening_params']['min_volume'], 
+                               disabled=not use_volume_filter)
+
+# 日內價格上漲篩選
+use_intraday_rise = st.sidebar.checkbox("啟用最近5日內日內上漲篩選", value=st.session_state['screening_params']['use_intraday_rise'], 
+                                        key="use_intraday_rise_checkbox")
+min_intraday_rise = st.sidebar.slider("日內最小上漲幅度 (%)", 10, 100, st.session_state['screening_params']['min_intraday_rise'], 
+                                      disabled=not use_intraday_rise)
+
+max_stock_percentage = st.sidebar.slider("篩選股票比例 (%)", 10, 100, int(st.session_state['screening_params']['max_stock_percentage'])) / 100.0
+
+# 更新 st.session_state 中的篩選參數
+st.session_state['screening_params'].update({
+    'index_option': index_option,
+    'prior_days': prior_days,
+    'consol_days': consol_days,
+    'min_rise_22': min_rise_22,
+    'min_rise_67': min_rise_67,
+    'min_rise_126': min_rise_126,
+    'max_range': max_range,
+    'min_adr': min_adr,
+    'use_candle_strength': use_candle_strength,
+    'use_volume_filter': use_volume_filter,
+    'min_volume': min_volume,
+    'use_intraday_rise': use_intraday_rise,
+    'min_intraday_rise': min_intraday_rise,
+    'max_stock_percentage': max_stock_percentage * 100.0
+})
+
+# 調試資訊：顯示勾選框和滑桿的狀態
+st.sidebar.write("### 調試資訊")
+st.sidebar.write(f"成交量篩選啟用: {use_volume_filter}")
+st.sidebar.write(f"日內上漲篩選啟用: {use_intraday_rise}")
+st.sidebar.write(f"最小成交量滑桿禁用: {not use_volume_filter}")
+st.sidebar.write(f"日內上漲滑桿禁用: {not use_intraday_rise}")
+
+# 運行篩選按鈕
+submit_button = st.sidebar.button("運行篩選", key="submit_screening")
+
+# 重置篩選按鈕
 if st.sidebar.button("重置篩選", key="reset_screening"):
-    for key in list(st.session_state.keys()):
-        if key not in ['repo_initialized', 'repo_manager']:
-            del st.session_state[key]
-    st.session_state['use_volume_filter'] = False
-    st.session_state['use_intraday_rise'] = False
+    st.session_state['screening_params'] = {
+        'index_option': "NASDAQ 100",
+        'prior_days': 20,
+        'consol_days': 10,
+        'min_rise_22': 10,
+        'min_rise_67': 40,
+        'min_rise_126': 80,
+        'max_range': 10,
+        'min_adr': 2,
+        'use_candle_strength': True,
+        'use_volume_filter': False,
+        'min_volume': 1000,
+        'use_intraday_rise': False,
+        'min_intraday_rise': 10,
+        'max_stock_percentage': 50.0
+    }
+    if 'df' in st.session_state:
+        del st.session_state['df']
+    if 'tickers' in st.session_state:
+        del st.session_state['tickers']
     st.rerun()
 
 st.sidebar.header("即時股票查詢")
@@ -148,18 +208,18 @@ if st.sidebar.button("查詢股票"):
         with st.spinner(f"正在查詢 {query_ticker}..."):
             result = screen_single_stock(
                 query_ticker,
-                prior_days=prior_days,
-                consol_days=consol_days,
-                min_rise_22=min_rise_22,
-                min_rise_67=min_rise_67,
-                min_rise_126=min_rise_126,
-                max_range=max_range,
-                min_adr=min_adr,
-                use_candle_strength=use_candle_strength,
-                use_volume_filter=st.session_state['use_volume_filter'],
-                min_volume=min_volume,
-                use_intraday_rise=st.session_state['use_intraday_rise'],
-                min_intraday_rise=min_intraday_rise
+                prior_days=st.session_state['screening_params']['prior_days'],
+                consol_days=st.session_state['screening_params']['consol_days'],
+                min_rise_22=st.session_state['screening_params']['min_rise_22'],
+                min_rise_67=st.session_state['screening_params']['min_rise_67'],
+                min_rise_126=st.session_state['screening_params']['min_rise_126'],
+                max_range=st.session_state['screening_params']['max_range'],
+                min_adr=st.session_state['screening_params']['min_adr'],
+                use_candle_strength=st.session_state['screening_params']['use_candle_strength'],
+                use_volume_filter=st.session_state['screening_params']['use_volume_filter'],
+                min_volume=st.session_state['screening_params']['min_volume'],
+                use_intraday_rise=st.session_state['screening_params']['use_intraday_rise'],
+                min_intraday_rise=st.session_state['screening_params']['min_intraday_rise']
             )
             st.session_state['query_result'] = result
             st.subheader(f"{query_ticker} 篩選結果")
@@ -170,9 +230,9 @@ if st.sidebar.button("查詢股票"):
                 latest_date = result['Date'].max()
                 latest_result = result[result['Date'] == latest_date].copy()
                 latest_result['Status'] = latest_result.apply(
-                    lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume'] and (not use_candle_strength or row['Candle_Strength'])
+                    lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume'] and (not st.session_state['screening_params']['use_candle_strength'] or row['Candle_Strength'])
                     else "已突破但條件不足" if row['Breakout']
-                    else "盤整中" if row['Consolidation_Range_%'] < max_range
+                    else "盤整中" if row['Consolidation_Range_%'] < st.session_state['screening_params']['max_range']
                     else "前段上升", axis=1
                 )
                 display_df = latest_result.rename(columns={
@@ -203,14 +263,14 @@ if submit_button:
         st.error(f"無法讀取 {TICKERS_CSV}: {str(e)}")
         csv_tickers = ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA']
 
-    if index_option == "NASDAQ 100":
+    if st.session_state['screening_params']['index_option'] == "NASDAQ 100":
         tickers = get_nasdaq_100(csv_tickers)
-    elif index_option == "S&P 500":
+    elif st.session_state['screening_params']['index_option'] == "S&P 500":
         tickers = get_sp500()
     else:
         tickers = get_nasdaq_all(csv_tickers)
     total_tickers = len(tickers)
-    max_stocks = int(total_tickers * max_stock_percentage)
+    max_stocks = int(total_tickers * (st.session_state['screening_params']['max_stock_percentage'] / 100.0))
     tickers = tickers[:max_stocks]
     st.session_state['tickers'] = tickers
 
@@ -221,20 +281,20 @@ if submit_button:
             progress_bar = st.progress(0)
             df = screen_stocks(
                 tickers=tickers,
-                stock_pool=index_option,
-                prior_days=prior_days,
-                consol_days=consol_days,
-                min_rise_22=min_rise_22,
-                min_rise_67=min_rise_67,
-                min_rise_126=min_rise_126,
-                max_range=max_range,
-                min_adr=min_adr,
-                use_candle_strength=use_candle_strength,
+                stock_pool=st.session_state['screening_params']['index_option'],
+                prior_days=st.session_state['screening_params']['prior_days'],
+                consol_days=st.session_state['screening_params']['consol_days'],
+                min_rise_22=st.session_state['screening_params']['min_rise_22'],
+                min_rise_67=st.session_state['screening_params']['min_rise_67'],
+                min_rise_126=st.session_state['screening_params']['min_rise_126'],
+                max_range=st.session_state['screening_params']['max_range'],
+                min_adr=st.session_state['screening_params']['min_adr'],
+                use_candle_strength=st.session_state['screening_params']['use_candle_strength'],
                 progress_bar=progress_bar,
-                use_volume_filter=st.session_state['use_volume_filter'],
-                min_volume=min_volume,
-                use_intraday_rise=st.session_state['use_intraday_rise'],
-                min_intraday_rise=min_intraday_rise
+                use_volume_filter=st.session_state['screening_params']['use_volume_filter'],
+                min_volume=st.session_state['screening_params']['min_volume'],
+                use_intraday_rise=st.session_state['screening_params']['use_intraday_rise'],
+                min_intraday_rise=st.session_state['screening_params']['min_intraday_rise']
             )
             progress_bar.progress(1.0)
             if df.empty:
@@ -249,9 +309,9 @@ if 'df' in st.session_state:
     latest_date = df['Date'].max()
     latest_df = df[df['Date'] == latest_date].copy()
     latest_df['Status'] = latest_df.apply(
-        lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume'] and (not use_candle_strength or row['Candle_Strength'])
+        lambda row: "已突破且可買入" if row['Breakout'] and row['Breakout_Volume'] and (not st.session_state['screening_params']['use_candle_strength'] or row['Candle_Strength'])
         else "已突破但條件不足" if row['Breakout']
-        else "盤整中" if row['Consolidation_Range_%'] < max_range
+        else "盤整中" if row['Consolidation_Range_%'] < st.session_state['screening_params']['max_range']
         else "前段上升", axis=1
     )
 
@@ -297,12 +357,12 @@ if 'df' in st.session_state:
         else:
             st.warning("無法繪製圖表：缺少 'Prior_Rise_22_%' 欄位")
 
-    breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume'] & (latest_df['Candle_Strength'] if use_candle_strength else True)]
+    breakout_df = latest_df[latest_df['Breakout'] & latest_df['Breakout_Volume'] & (latest_df['Candle_Strength'] if st.session_state['screening_params']['use_candle_strength'] else True)]
     if not breakout_df.empty:
         st.subheader("當前突破股票（可買入）")
-        plot_breakout_stocks(breakout_df['Ticker'].unique(), consol_days)
+        plot_breakout_stocks(breakout_df['Ticker'].unique(), st.session_state['screening_params']['consol_days'])
     else:
         st.info("當前無突破股票")
 
 tickers = st.session_state.get('tickers', [])
-st.write(f"篩選範圍：{index_option} ({len(tickers)} 隻股票)")
+st.write(f"篩選範圍：{st.session_state['screening_params']['index_option']} ({len(tickers)} 隻股票)")
