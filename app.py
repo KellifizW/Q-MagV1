@@ -102,6 +102,12 @@ if st.button("更新資料庫", key="update_db"):
     else:
         st.error("Git 倉庫未初始化，請先點擊「初始化並更新資料庫」")
 
+# 初始化篩選參數的狀態
+if 'use_volume_filter' not in st.session_state:
+    st.session_state['use_volume_filter'] = False
+if 'use_intraday_rise' not in st.session_state:
+    st.session_state['use_intraday_rise'] = False
+
 with st.sidebar.form(key="screening_form"):
     st.header("篩選參數")
     index_option = st.selectbox("選擇股票池", ["NASDAQ 100", "S&P 500", "NASDAQ All"])
@@ -114,20 +120,25 @@ with st.sidebar.form(key="screening_form"):
     min_adr = st.slider("最小 ADR (%)", 0, 10, 2)
     use_candle_strength = st.checkbox("啟用K線強度篩選", value=True, help="勾選以要求突破K線收盤價靠近高點 (>70%)")
     
-    # 新增成交量篩選參數
-    use_volume_filter = st.checkbox("啟用成交量篩選", value=False)
-    min_volume = st.slider("最近10日最小成交量（萬股）", 1000, 9000, 1000, disabled=not use_volume_filter)
+    # 成交量篩選
+    use_volume_filter = st.checkbox("啟用成交量篩選", value=st.session_state['use_volume_filter'], key="use_volume_filter_checkbox")
+    st.session_state['use_volume_filter'] = use_volume_filter
+    min_volume = st.slider("最近10日最小成交量（萬股）", 1000, 9000, 1000, disabled=not st.session_state['use_volume_filter'])
     
-    # 新增日內價格上漲篩選參數
-    use_intraday_rise = st.checkbox("啟用最近5日內日內上漲篩選", value=False)
-    min_intraday_rise = st.slider("日內最小上漲幅度 (%)", 10, 100, 10, disabled=not use_intraday_rise)
+    # 日內價格上漲篩選
+    use_intraday_rise = st.checkbox("啟用最近5日內日內上漲篩選", value=st.session_state['use_intraday_rise'], key="use_intraday_rise_checkbox")
+    st.session_state['use_intraday_rise'] = use_intraday_rise
+    min_intraday_rise = st.slider("日內最小上漲幅度 (%)", 10, 100, 10, disabled=not st.session_state['use_intraday_rise'])
     
     max_stock_percentage = st.slider("篩選股票比例 (%)", 10, 100, 50) / 100.0
     submit_button = st.form_submit_button("運行篩選")
 
 if st.sidebar.button("重置篩選", key="reset_screening"):
     for key in list(st.session_state.keys()):
-        del st.session_state[key]
+        if key not in ['repo_initialized', 'repo_manager']:
+            del st.session_state[key]
+    st.session_state['use_volume_filter'] = False
+    st.session_state['use_intraday_rise'] = False
     st.rerun()
 
 st.sidebar.header("即時股票查詢")
@@ -145,9 +156,9 @@ if st.sidebar.button("查詢股票"):
                 max_range=max_range,
                 min_adr=min_adr,
                 use_candle_strength=use_candle_strength,
-                use_volume_filter=use_volume_filter,
+                use_volume_filter=st.session_state['use_volume_filter'],
                 min_volume=min_volume,
-                use_intraday_rise=use_intraday_rise,
+                use_intraday_rise=st.session_state['use_intraday_rise'],
                 min_intraday_rise=min_intraday_rise
             )
             st.session_state['query_result'] = result
@@ -220,9 +231,9 @@ if submit_button:
                 min_adr=min_adr,
                 use_candle_strength=use_candle_strength,
                 progress_bar=progress_bar,
-                use_volume_filter=use_volume_filter,
+                use_volume_filter=st.session_state['use_volume_filter'],
                 min_volume=min_volume,
-                use_intraday_rise=use_intraday_rise,
+                use_intraday_rise=st.session_state['use_intraday_rise'],
                 min_intraday_rise=min_intraday_rise
             )
             progress_bar.progress(1.0)
