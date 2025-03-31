@@ -1,4 +1,3 @@
-# visualize.py
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -6,7 +5,7 @@ from plotly.subplots import make_subplots
 from screening import fetch_stock_data
 
 def plot_top_5_stocks(top_5_tickers):
-    """繪製前 5 名股票的走勢圖（包含股價、成交量、10 日均線和 MACD）"""
+    """繪製前 5 名股票的走勢圖（包含股價、成交量、10 日均線、MACD 和 VWAP）"""
     stock_data_batch = st.session_state.get('stock_data', None)
     
     for ticker in top_5_tickers:
@@ -48,6 +47,10 @@ def plot_top_5_stocks(top_5_tickers):
             stock_data['MA10'] = stock_data['Close'].rolling(window=10).mean()
             ma10 = stock_data['MA10'].astype(float).tolist()
             
+            # 計算 VWAP
+            vwap = (stock_data['Close'] * stock_data['Volume']).cumsum() / stock_data['Volume'].cumsum()
+            vwap = vwap.astype(float).tolist()
+            
             ema12 = stock_data["Close"].ewm(span=12, adjust=False).mean()
             ema26 = stock_data["Close"].ewm(span=26, adjust=False).mean()
             macd_line = (ema12 - ema26).tolist()
@@ -65,6 +68,9 @@ def plot_top_5_stocks(top_5_tickers):
                                      customdata=customdata_price), row=1, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=x_indices, y=ma10, mode="lines", name="10 日均線", line=dict(color="orange"),
                                      hovertemplate="日期: %{customdata}<br>10 日均線: %{y:.2f}", customdata=dates),
+                          row=1, col=1, secondary_y=False)
+            fig.add_trace(go.Scatter(x=x_indices, y=vwap, mode="lines", name="VWAP", line=dict(color="purple", dash='dash'),
+                                     hovertemplate="日期: %{customdata}<br>VWAP: %{y:.2f}", customdata=dates),
                           row=1, col=1, secondary_y=False)
             fig.add_trace(go.Bar(x=x_indices, y=volumes, name="成交量", opacity=0.3, marker_color="pink",
                                  hovertemplate="日期: %{customdata}<br>成交量: %{y:,.0f}", customdata=dates),
@@ -96,7 +102,7 @@ def plot_top_5_stocks(top_5_tickers):
             st.error(f"繪製 {ticker} 的圖表時發生錯誤：{str(e)}")
 
 def plot_breakout_stocks(breakout_tickers, consol_days):
-    """繪製突破股票的圖表（包含股價、阻力位、支撐位、買入信號、成交量和 MACD）"""
+    """繪製突破股票的圖表（包含股價、阻力位、支撐位、買入信號、成交量、MACD 和 VWAP）"""
     stock_data_batch = st.session_state.get('stock_data', None)
     
     for ticker in breakout_tickers:
@@ -130,6 +136,10 @@ def plot_breakout_stocks(breakout_tickers, consol_days):
             prices = stock_data["Close"].astype(float).tolist()
             volumes = stock_data["Volume"].astype(int).tolist()
             
+            # 計算 VWAP
+            vwap = (stock_data['Close'] * stock_data['Volume']).cumsum() / stock_data['Volume'].cumsum()
+            vwap = vwap.astype(float).tolist()
+            
             ema12 = stock_data["Close"].ewm(span=12, adjust=False).mean()
             ema26 = stock_data["Close"].ewm(span=26, adjust=False).mean()
             macd_line = (ema12 - ema26).tolist()
@@ -143,6 +153,9 @@ def plot_breakout_stocks(breakout_tickers, consol_days):
             
             fig.add_trace(go.Scatter(x=x_indices, y=prices, mode="lines", name="價格", line=dict(color="blue"),
                                      hovertemplate="日期: %{customdata}<br>價格: %{y:.2f}", customdata=dates),
+                          row=1, col=1, secondary_y=False)
+            fig.add_trace(go.Scatter(x=x_indices, y=vwap, mode="lines", name="VWAP", line=dict(color="purple", dash='dash'),
+                                     hovertemplate="日期: %{customdata}<br>VWAP: %{y:.2f}", customdata=dates),
                           row=1, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=[x_indices[0], x_indices[-1]], y=[recent_high, recent_high], mode='lines',
                                      line=dict(dash='dash', color='red'), name='阻力位', hovertemplate="阻力位: %{y:.2f}"),
