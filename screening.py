@@ -31,7 +31,8 @@ def get_nasdaq_all(csv_tickers):
     return csv_tickers
 
 def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, 
-                        max_range=5, min_adr=5, use_candle_strength=True, show_all=False):
+                        max_range=5, min_adr=5, use_candle_strength=True, show_all=False,
+                        use_volume_filter=False, min_volume=1000, use_intraday_rise=False, min_intraday_rise=10):
     logger.info(f"開始分析股票批次，股票數量: {len(tickers)}")
     results = []
     matched_tickers = set()
@@ -53,7 +54,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         
         # 提取數據並統一索引
         logger.info(f"提取 {ticker} 的收盤價、成交量、高價、低價")
-        # 檢查索引是否已帶時區，根據數據來源處理
         stock.index = pd.to_datetime(stock.index)
         if stock.index.tz is None:
             stock.index = stock.index.tz_localize('US/Eastern', ambiguous='NaT', nonexistent='NaT')
@@ -68,10 +68,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         low = pd.Series(stock['Low']).dropna()
         
         logger.info(f"日期範圍: {dates.min()} 至 {dates.max()}, 總天數: {len(dates)}")
-        logger.info(f"close.index: {close.index.min()} 至 {close.index.max()}, 天數: {len(close)}")
-        logger.info(f"volume.index: {volume.index.min()} 至 {volume.index.max()}, 天數: {len(volume)}")
-        logger.info(f"high.index: {high.index.min()} 至 {high.index.max()}, 天數: {len(high)}")
-        logger.info(f"low.index: {low.index.min()} 至 {low.index.max()}, 天數: {len(low)}")
         
         if len(dates) < required_days:
             logger.warning(f"股票 {ticker} 的數據天數 ({len(dates)}) 小於所需天數 ({required_days})，跳過")
@@ -106,13 +102,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         rise_22 = (close / close_shift_22 - 1) * 100
         rise_67 = (close / close_shift_67 - 1) * 100
         rise_126 = (close / close_shift_126 - 1) * 100
-        logger.info(f"{ticker} 最新漲幅 - 22日: {rise_22.iloc[-1] if not rise_22.empty else 'NaN'}%, "
-                    f"67日: {rise_67.iloc[-1] if not rise_67.empty else 'NaN'}%, "
-                    f"126日: {rise_126.iloc[-1] if not rise_126.empty else 'NaN'}%")
-        
-        if rise_126.isna().all() or rise_67.isna().all() or rise_22.isna().all():
-            logger.warning(f"股票 {ticker} 的漲幅數據全為 NaN，跳過")
-            continue
         
         # 盤整與突破計算
         logger.info(f"計算 {ticker} 的盤整與突破條件")
@@ -124,14 +113,21 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         adr = daily_range.rolling(prior_days).mean() * 100
         breakout = (close > recent_high.shift(1)) & (close.shift(1) <= recent_high.shift(1))
         breakout_volume = volume > volume.rolling(10).mean() * 1.5
-        logger.info(f"{ticker} 最新條件 - 盤整範圍: {consolidation_range.iloc[-1] if not consolidation_range.empty else 'NaN'}%, "
-                    f"ADR: {adr.iloc[-1] if not adr.empty else 'NaN'}%, "
-                    f"突破: {breakout.iloc[-1] if not breakout.empty else 'NaN'}, "
-                    f"突破成交量: {breakout_volume.iloc[-1] if not breakout_volume.empty else 'NaN'}")
         
         # K線強度計算
         candle_strength = (close - low) / (high - low) > 0.7 if use_candle_strength else pd.Series(True, index=close.index)
-        logger.info(f"{ticker} 最新 K線強度: {candle_strength.iloc[-1] if not candle_strength.empty else 'NaN'}")
+        
+        # 新增成交量篩選
+        volume_condition = True
+        if use_volume_filter:
+            recent_volume = volume.tail(10)  # 最近10日成交量
+            volume_condition = (recent_volume.max() >= min_volume * 10000)  # 轉換為股數
+        
+        # 新增日內價格上漲篩選
+        intraday_rise_condition = True
+        if use_intraday_rise:
+            intraday_range = ((high - low) / prev_close * 100).tail(5)  # 最近5日日內幅度
+            intraday_rise_condition = (intraday_range.max() >= min_intraday_rise)
         
         # 風險管理計算
         stop_loss = recent_low
@@ -147,14 +143,10 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
         
         # 篩選條件
         mask = (rise_22 >= min_rise_22) & (rise_67 >= min_rise_67) & (rise_126 >= min_rise_126) & \
-               (consolidation_range <= max_range) & (adr >= min_adr)
-        logger.info(f"{ticker} 篩選條件滿足的天數: {mask.sum()}, 總天數: {len(mask)}, "
-                    f"條件: rise_22>={min_rise_22}, rise_67>={min_rise_67}, rise_126>={min_rise_126}, "
-                    f"consolidation_range<={max_range}, adr>={min_adr}")
+               (consolidation_range <= max_range) & (adr >= min_adr) & volume_condition & intraday_rise_condition
         
         if show_all:
             mask_full = mask & breakout & breakout_volume & candle_strength
-            logger.info(f"{ticker} 顯示所有條件滿足的天數: {mask_full.sum()}")
             valid_dates = dates[-1:]
             targets_filtered = targets.reindex(valid_dates).fillna(method='ffill') if not targets.empty else pd.DataFrame(index=valid_dates, columns=['20%', '50%', '100%'])
             matched = pd.DataFrame({
@@ -175,7 +167,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                 'Target_100%': targets_filtered['100%']
             })
             results.append(matched)
-            logger.info(f"股票 {ticker} 返回最新一天數據，記錄數: {len(matched)}")
         elif mask.any():
             valid_dates = dates[mask]
             valid_dates = valid_dates[valid_dates.isin(dates)]
@@ -199,8 +190,6 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
                     'Target_100%': targets_filtered['100%'] if not targets_filtered.empty else pd.Series([None] * len(valid_dates))
                 })
                 results.append(matched)
-                logger.info(f"股票 {ticker} 符合條件，記錄數: {len(matched)}")
-                
                 if dates[-1] in valid_dates:
                     matched_tickers.add(ticker)
                     st.write(f"股票 {ticker} 符合條件（最新）：22 日漲幅 = {rise_22.iloc[-1]:.2f}%, "
@@ -222,7 +211,8 @@ def analyze_stock_batch(data, tickers, prior_days=20, consol_days=10, min_rise_2
             return pd.DataFrame()
 
 def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, 
-                  max_range=5, min_adr=5, use_candle_strength=True, progress_bar=None):
+                  max_range=5, min_adr=5, use_candle_strength=True, progress_bar=None,
+                  use_volume_filter=False, min_volume=1000, use_intraday_rise=False, min_intraday_rise=10):
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
     logger.info(f"開始篩選股票，所需天數: {required_days}")
     data, all_tickers = fetch_stock_data(tickers, trading_days=required_days)
@@ -242,7 +232,9 @@ def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_2
     logger.info(f"篩選股票池: {stock_pool}，股票數: {len(tickers)}")
     
     results = analyze_stock_batch(data, tickers, prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, 
-                                  max_range, min_adr, use_candle_strength, show_all=False)
+                                  max_range, min_adr, use_candle_strength, show_all=False,
+                                  use_volume_filter=use_volume_filter, min_volume=min_volume,
+                                  use_intraday_rise=use_intraday_rise, min_intraday_rise=min_intraday_rise)
     
     if progress_bar:
         progress_bar.progress(1.0)
@@ -251,7 +243,8 @@ def screen_stocks(tickers, stock_pool, prior_days=20, consol_days=10, min_rise_2
     return results
 
 def screen_single_stock(ticker, prior_days=20, consol_days=10, min_rise_22=10, min_rise_67=40, min_rise_126=80, 
-                        max_range=5, min_adr=5, use_candle_strength=True):
+                        max_range=5, min_adr=5, use_candle_strength=True,
+                        use_volume_filter=False, min_volume=1000, use_intraday_rise=False, min_intraday_rise=10):
     required_days = max(prior_days + consol_days + 30, 126 + consol_days)
     logger.info(f"開始單一股票查詢: {ticker}，所需天數: {required_days}")
     data = fetch_yfinance_data(ticker, trading_days=required_days)
@@ -260,4 +253,6 @@ def screen_single_stock(ticker, prior_days=20, consol_days=10, min_rise_22=10, m
         return pd.DataFrame()
     logger.info(f"成功獲取 {ticker} 的數據，開始分析")
     return analyze_stock_batch(data, [ticker], prior_days, consol_days, min_rise_22, min_rise_67, min_rise_126, 
-                               max_range, min_adr, use_candle_strength, show_all=True)
+                               max_range, min_adr, use_candle_strength, show_all=True,
+                               use_volume_filter=use_volume_filter, min_volume=min_volume,
+                               use_intraday_rise=use_intraday_rise, min_intraday_rise=min_intraday_rise)
