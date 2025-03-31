@@ -113,6 +113,15 @@ with st.sidebar.form(key="screening_form"):
     max_range = st.slider("最大盤整範圍 (%)", 3, 15, 10)
     min_adr = st.slider("最小 ADR (%)", 0, 10, 2)
     use_candle_strength = st.checkbox("啟用K線強度篩選", value=True, help="勾選以要求突破K線收盤價靠近高點 (>70%)")
+    
+    # 新增成交量篩選參數
+    use_volume_filter = st.checkbox("啟用成交量篩選", value=False)
+    min_volume = st.slider("最近10日最小成交量（萬股）", 1000, 9000, 1000, disabled=not use_volume_filter)
+    
+    # 新增日內價格上漲篩選參數
+    use_intraday_rise = st.checkbox("啟用最近5日內日內上漲篩選", value=False)
+    min_intraday_rise = st.slider("日內最小上漲幅度 (%)", 10, 100, 10, disabled=not use_intraday_rise)
+    
     max_stock_percentage = st.slider("篩選股票比例 (%)", 10, 100, 50) / 100.0
     submit_button = st.form_submit_button("運行篩選")
 
@@ -135,7 +144,11 @@ if st.sidebar.button("查詢股票"):
                 min_rise_126=min_rise_126,
                 max_range=max_range,
                 min_adr=min_adr,
-                use_candle_strength=use_candle_strength
+                use_candle_strength=use_candle_strength,
+                use_volume_filter=use_volume_filter,
+                min_volume=min_volume,
+                use_intraday_rise=use_intraday_rise,
+                min_intraday_rise=min_intraday_rise
             )
             st.session_state['query_result'] = result
             st.subheader(f"{query_ticker} 篩選結果")
@@ -206,7 +219,11 @@ if submit_button:
                 max_range=max_range,
                 min_adr=min_adr,
                 use_candle_strength=use_candle_strength,
-                progress_bar=progress_bar
+                progress_bar=progress_bar,
+                use_volume_filter=use_volume_filter,
+                min_volume=min_volume,
+                use_intraday_rise=use_intraday_rise,
+                min_intraday_rise=min_intraday_rise
             )
             progress_bar.progress(1.0)
             if df.empty:
@@ -227,17 +244,31 @@ if 'df' in st.session_state:
         else "前段上升", axis=1
     )
 
+    # 計算最近5日平均成交量
+    stock_data = st.session_state.get('stock_data')
+    if stock_data is not None:
+        avg_volumes = {}
+        for ticker in latest_df['Ticker'].unique():
+            try:
+                ticker_data = stock_data.xs(ticker, level='Ticker', axis=1)
+                recent_volume = ticker_data['Volume'].tail(5)
+                avg_volumes[ticker] = recent_volume.mean()
+            except KeyError:
+                avg_volumes[ticker] = None
+        latest_df['Avg_Volume_5D'] = latest_df['Ticker'].map(avg_volumes)
+
     display_df = latest_df.rename(columns={
         'Ticker': '股票代碼', 'Date': '日期', 'Price': '價格',
         'Prior_Rise_22_%': '22 日內漲幅 (%)', 'Prior_Rise_67_%': '67 日內漲幅 (%)',
         'Prior_Rise_126_%': '126 日內漲幅 (%)', 'Consolidation_Range_%': '盤整範圍 (%)',
         'ADR_%': '平均日波幅 (%)', 'Breakout': '是否突破', 'Breakout_Volume': '突破成交量',
         'Candle_Strength': 'K線強度', 'Stop_Loss': '止損點',
-        'Target_20%': '目標20%', 'Target_50%': '目標50%', 'Target_100%': '目標100%'
+        'Target_20%': '目標20%', 'Target_50%': '目標50%', 'Target_100%': '目標100%',
+        'Avg_Volume_5D': '最近5日平均成交量'
     })
 
     desired_columns = ['股票代碼', '日期', '價格', '22 日內漲幅 (%)', '67 日內漲幅 (%)', '126 日內漲幅 (%)', 
-                       '盤整範圍 (%)', '平均日波幅 (%)', 'Status', 'K線強度', '止損點', '目標20%', '目標50%', '目標100%']
+                       '盤整範圍 (%)', '平均日波幅 (%)', 'Status', 'K線強度', '止損點', '目標20%', '目標50%', '目標100%', '最近5日平均成交量']
     available_columns = [col for col in desired_columns if col in display_df.columns]
     if available_columns:
         st.dataframe(display_df[available_columns])
